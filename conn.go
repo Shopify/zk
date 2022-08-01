@@ -35,10 +35,12 @@ var ErrInvalidPath = errors.New("zk: invalid path")
 var DefaultLogger Logger = defaultLogger{}
 
 const (
-	bufferSize      = 1536 * 1024
-	eventChanSize   = 6
-	sendChanSize    = 16
-	protectedPrefix = "_c_"
+	bufferSize              = 1536 * 1024
+	eventChanSize           = 6
+	sendChanSize            = 16
+	watchChanSize           = 2
+	persistentWatchChanSize = 8
+	protectedPrefix         = "_c_"
 )
 
 type watchType int
@@ -924,11 +926,24 @@ func (c *Conn) nextXid() int32 {
 }
 
 func (c *Conn) addWatcher(path string, watchType watchType) <-chan Event {
+	var chanSz int
+	switch watchType {
+	case watchTypePersistent, watchTypePersistentRecursive:
+		// Persistent watches have a larger buffer for events.
+		// This mitigates, but does not eliminate, the possibility for a slow consumer to block the producer.
+		chanSz = persistentWatchChanSize
+	default:
+		// Non-persistent watches have a buffer for 1 change event + 1 close event.
+		// This ensures that a slow consumer can never block the producer.
+		chanSz = watchChanSize
+	}
+
+	ch := make(chan Event, chanSz)
+	wpt := watchPathType{path, watchType}
+
 	c.watchersLock.Lock()
 	defer c.watchersLock.Unlock()
 
-	ch := make(chan Event, 1)
-	wpt := watchPathType{path, watchType}
 	if watchType == watchTypePersistentRecursive {
 		c.recWatchers[wpt] = append(c.recWatchers[wpt], ch)
 	} else {
