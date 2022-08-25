@@ -1,6 +1,8 @@
 package zk
 
 import (
+	"encoding/json"
+	"fmt"
 	gopath "path"
 	"strings"
 	"sync"
@@ -142,4 +144,11 @@ func (n cachedLeavesTreeNode) deleteNodes(nodes []string) {
 	default:
 		n[nodes[0]].deleteNodes(nodes[1:])
 	}
+}
+
+func (w *CachedLeavesWalker) Dump() {
+	w.lock.RLock()
+	defer w.lock.RUnlock()
+	data, _ := json.Marshal(w.tree)
+	fmt.Println(string(data))
 }
