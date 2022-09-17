@@ -1,6 +1,7 @@
 package zk
 
 import (
+	"context"
 	gopath "path"
 	"strings"
 	"sync"
