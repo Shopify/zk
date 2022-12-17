@@ -1086,6 +1086,20 @@ func (c *Conn) AddAuthCtx(ctx context.Context, scheme string, auth []byte) error
 	return nil
 }
 
+func (c *Conn) AddWatchCtxAsync(ctx context.Context, path string, recursive bool, callback func(context.Context, Event)) error {
+	ch, err := c.AddWatchCtx(ctx, path, recursive)
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		for e := range ch {
+			callback(ctx, e)
+		}
+	}()
+	return nil
+}
+
 // AddWatch creates a persistent (optionally recursive) watch at the given path.
 func (c *Conn) AddWatch(path string, recursive bool) (<-chan Event, error) {
 	return c.AddWatchCtx(context.Background(), path, recursive)
@@ -1184,6 +1198,13 @@ func (c *Conn) ChildrenWCtx(ctx context.Context, path string) ([]string, *Stat, 
 		return nil, nil, nil, err
 	}
 	return res.Children, &res.Stat, ech, err
+}
+
+func (c *Conn) GetCtxAsync(ctx context.Context, path string, callback func(context.Context, []byte, *Stat, error)) {
+	go func() {
+		data, stat, err := c.GetCtx(ctx, path)
+		callback(ctx, data, stat, err)
+	}()
 }
 
 // Get gets the contents of a znode.
