@@ -1157,6 +1157,13 @@ func (c *Conn) RemoveWatchCtx(ctx context.Context, ech <-chan Event) error {
 	return nil
 }
 
+func (c *Conn) ChildrenCtxAsync(ctx context.Context, path string, callback func(context.Context, string, []string, *Stat, error)) {
+	go func() {
+		childrens, stat, err := c.ChildrenCtx(ctx, path)
+		callback(ctx, path, childrens, stat, err)
+	}()
+}
+
 // Children returns the children of a znode.
 func (c *Conn) Children(path string) ([]string, *Stat, error) {
 	return c.ChildrenCtx(context.Background(), path)
