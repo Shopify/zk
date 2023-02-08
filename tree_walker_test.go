@@ -1,17 +1,21 @@
 package zk
 
 import (
+	"context"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 )
 
 func TestTreeWalker(t *testing.T) {
 	testCases := []struct {
-		name        string
-		setupWalker func(w TreeWalker) TreeWalker
-		expected    []string
-		ignoreOrder bool // For parallel walks which are never consistent.
+		name          string
+		setupWalker   func(w TreeWalker) TreeWalker
+		expected      []string
+		ignoreOrder   bool // For parallel walks which are never consistent.
+		cancelContext bool // Cancels context before walk starts.
+		wantError     string
 	}{
 		{
 			name: "DepthFirst_IncludeRoot",
@@ -27,9 +31,17 @@ func TestTreeWalker(t *testing.T) {
 			},
 		},
 		{
-			name: "DepthFirstParallel_IncludeRoot",
+			name: "DepthFirst_IncludeRoot_CancelContext",
 			setupWalker: func(w TreeWalker) TreeWalker {
-				return w.DepthFirstParallel().IncludeRoot(true)
+				return w.DepthFirst().IncludeRoot(true)
+			},
+			cancelContext: true,
+			wantError:     "context canceled",
+		},
+		{
+			name: "DepthFirst_IncludeRoot_Concurrency2",
+			setupWalker: func(w TreeWalker) TreeWalker {
+				return w.DepthFirst().Concurrency(2).IncludeRoot(true)
 			},
 			expected: []string{
 				"/gozk-test-walker/a/b",
@@ -54,9 +66,17 @@ func TestTreeWalker(t *testing.T) {
 			},
 		},
 		{
-			name: "BreadthFirstParallel_IncludeRoot",
+			name: "BreadthFirst_IncludeRoot_CancelContext",
 			setupWalker: func(w TreeWalker) TreeWalker {
-				return w.BreadthFirstParallel().IncludeRoot(true)
+				return w.BreadthFirst().IncludeRoot(true)
+			},
+			cancelContext: true,
+			wantError:     "context canceled",
+		},
+		{
+			name: "BreadthFirst_IncludeRoot_Concurrency2",
+			setupWalker: func(w TreeWalker) TreeWalker {
+				return w.BreadthFirst().IncludeRoot(true).Concurrency(2)
 			},
 			expected: []string{
 				"/gozk-test-walker",
@@ -80,9 +100,9 @@ func TestTreeWalker(t *testing.T) {
 			},
 		},
 		{
-			name: "DepthFirstParallel_ExcludeRoot",
+			name: "DepthFirst_ExcludeRoot_Concurrency2",
 			setupWalker: func(w TreeWalker) TreeWalker {
-				return w.DepthFirstParallel().IncludeRoot(false)
+				return w.DepthFirst().Concurrency(2).IncludeRoot(false)
 			},
 			expected: []string{
 				"/gozk-test-walker/a/b",
@@ -105,9 +125,9 @@ func TestTreeWalker(t *testing.T) {
 			},
 		},
 		{
-			name: "BreadthFirstParallel_ExcludeRoot",
+			name: "BreadthFirst_ExcludeRoot_Concurrency2",
 			setupWalker: func(w TreeWalker) TreeWalker {
-				return w.BreadthFirstParallel().IncludeRoot(false)
+				return w.BreadthFirst().Concurrency(2).IncludeRoot(false)
 			},
 			expected: []string{
 				"/gozk-test-walker/a",
@@ -128,9 +148,9 @@ func TestTreeWalker(t *testing.T) {
 			},
 		},
 		{
-			name: "DepthFirstParallel_LeavesOnly",
+			name: "DepthFirst_LeavesOnly_Concurrency2",
 			setupWalker: func(w TreeWalker) TreeWalker {
-				return w.DepthFirstParallel().LeavesOnly()
+				return w.DepthFirst().Concurrency(2).LeavesOnly()
 			},
 			expected: []string{
 				"/gozk-test-walker/a/b",
@@ -149,9 +169,9 @@ func TestTreeWalker(t *testing.T) {
 			},
 		},
 		{
-			name: "BreadthFirstParallel_LeavesOnly",
+			name: "BreadthFirst_LeavesOnly_Concurrency2",
 			setupWalker: func(w TreeWalker) TreeWalker {
-				return w.BreadthFirstParallel().LeavesOnly()
+				return w.BreadthFirst().Concurrency(2).LeavesOnly()
 			},
 			expected: []string{
 				"/gozk-test-walker/a/b",
@@ -201,46 +221,81 @@ func TestTreeWalker(t *testing.T) {
 			}
 
 			for _, testCase := range testCases {
-				// Test the Walk with visitor.
-				t.Run(testCase.name+"_Walk", func(t *testing.T) {
+				// Test WalkCtx with visitor.
+				t.Run(testCase.name+"_WalkCtx", func(t *testing.T) {
 					var visited []string
 					l := sync.Mutex{} // Protects visited from concurrent access.
 					w := InitTreeWalker(c.ChildrenCtx, "/gozk-test-walker")
-					err := testCase.setupWalker(w).Walk(func(path string, _ *Stat) error {
+
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					if testCase.cancelContext {
+						cancel() // Immediately cancel the context to abort the walk.
+					}
+
+					err := testCase.setupWalker(w).WalkCtx(ctx, func(_ context.Context, path string, _ *Stat) error {
 						l.Lock()
 						defer l.Unlock()
 						visited = append(visited, path)
 						return nil
 					})
 					if err != nil {
-						t.Fatalf("%s Walk returned an error: %+v", testCase.name, err)
+						if testCase.wantError != "" {
+							if !strings.Contains(err.Error(), testCase.wantError) {
+								t.Fatalf("%s WalkCtx returned unexpected error: %+v; wanted error: %s", testCase.name, err, testCase.wantError)
+							}
+						} else {
+							t.Fatalf("%s WalkCtx returned an unexpected error: %+v; wanted no error", testCase.name, err)
+						}
+					} else if testCase.wantError != "" {
+						t.Fatalf("%s WalkCtx returned no error; wanted error: %s", testCase.name, testCase.wantError)
 					}
 
-					l.Lock()
-					defer l.Unlock()
-					if testCase.ignoreOrder {
-						expectVisitedUnordered(t, testCase.expected, visited)
-					} else {
-						expectVisitedExact(t, testCase.expected, visited)
+					if len(testCase.expected) > 0 {
+						l.Lock()
+						defer l.Unlock()
+						if testCase.ignoreOrder {
+							expectVisitedUnordered(t, testCase.expected, visited)
+						} else {
+							expectVisitedExact(t, testCase.expected, visited)
+						}
 					}
 				})
 
-				// Test the walk with channel events.
-				t.Run(testCase.name+"_WalkChan", func(t *testing.T) {
+				// Test WalkChanCtx.
+				t.Run(testCase.name+"_WalkChanCtx", func(t *testing.T) {
 					var visited []string
 					w := InitTreeWalker(c.ChildrenCtx, "/gozk-test-walker")
-					ch := testCase.setupWalker(w).WalkChan(1)
+
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					if testCase.cancelContext {
+						cancel() // Immediately cancel the context to abort the walk.
+					}
+
+					ch := testCase.setupWalker(w).WalkChanCtx(ctx, 1)
 					for e := range ch {
 						if e.Err != nil {
-							t.Fatalf("%s WalkChan returned an error: %+v", testCase.name, e.Err)
+							if testCase.wantError != "" {
+								if !strings.Contains(e.Err.Error(), testCase.wantError) {
+									t.Fatalf("%s WalkChanCtx returned unexpected error: %+v; wanted error: %s", testCase.name, e.Err, testCase.wantError)
+								}
+							} else {
+								t.Fatalf("%s WalkChanCtx returned an unexpected error: %+v; wanted no error", testCase.name, e.Err)
+							}
+						} else if testCase.wantError != "" {
+							t.Fatalf("%s WalkChanCtx returned no error; wanted error: %s", testCase.name, testCase.wantError)
 						}
+
 						visited = append(visited, e.Path)
 					}
 
-					if testCase.ignoreOrder {
-						expectVisitedUnordered(t, testCase.expected, visited)
-					} else {
-						expectVisitedExact(t, testCase.expected, visited)
+					if len(testCase.expected) > 0 {
+						if testCase.ignoreOrder {
+							expectVisitedUnordered(t, testCase.expected, visited)
+						} else {
+							expectVisitedExact(t, testCase.expected, visited)
+						}
 					}
 				})
 			}

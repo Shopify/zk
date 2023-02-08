@@ -44,7 +44,8 @@ func main() {
 
 	// Walk breath-first with parallel traversal and receive events by channel.
 	ch := c.TreeWalker("/foo").
-		BreadthFirstParallel().
+		BreadthFirst().
+		Concurrency(4).
 		WalkChan(8) // You can tune the buffer size.
 	for e := range ch {
 		if e.Err != nil {
