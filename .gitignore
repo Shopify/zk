@@ -1,6 +1,9 @@
 .vscode/
+.idea
 .DS_Store
 profile.cov
+coverage.xml
+bin/
 zookeeper
 zookeeper-*/
 zookeeper-*.tar.gz

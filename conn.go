@@ -882,7 +882,7 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 			}
 			c.sendEvent(ev)
 			c.notifyWatchers(ev)
-		} else if res.Xid == -2 {
+		} else if res.Xid == -2 { //nolint:revive
 			// Ping response. Ignore.
 		} else if res.Xid < 0 {
 			c.logger.Printf("xid < 0 (%d) but not ping or watcher event", res.Xid)

@@ -1,11 +1,8 @@
-
 REPO_ROOT = $(shell pwd -P)
-TOOLS_BINDIR = $(REPO_ROOT)/tools/bin
-GOTESTSUM_BIN = $(TOOLS_BINDIR)/gotestsum
-GOLANGCI_LINT_BIN ?= $(TOOLS_BINDIR)/golangci-lint
-
 PACKAGES := $(shell go list ./... | grep -v examples)
 
+GOLANGCILINT_VERSION = 1.54
+GOTESTSUM_VERSION = 1.8.2
 # make file to hold the logic of build and test setup
 ZK_VERSION ?= 3.6.2
 
@@ -18,49 +15,49 @@ else
 endif
 ZK_URL = "https://archive.apache.org/dist/zookeeper/zookeeper-$(ZK_VERSION)/$(ZK).tar.gz"
 
+# Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
+ifeq (,$(shell go env GOBIN))
+GOBIN=$(shell go env GOPATH)/bin
+else
+GOBIN=$(shell go env GOBIN)
+endif
+
 .DEFAULT_GOAL := test
 
-$(ZK):
+validate-java:
+	which java
+
+$(ZK): validate-java
 	wget $(ZK_URL)
 	tar -zxf $(ZK).tar.gz
 	rm $(ZK).tar.gz
 
 zookeeper: $(ZK)
 	# we link to a standard directory path so then the tests dont need to find based on version
-	# in the test code. this allows backward compatable testing.
+	# in the test code. this allows backward compatible testing.
 	ln -s $(ZK) zookeeper
 
 .PHONY: setup
-setup: zookeeper tools
-
-.PHONY: tools
-tools: tools/tools.go tools/go.mod
-	mkdir -p "$(TOOLS_BINDIR)"
-	cd tools && \
-		export GOBIN="${TOOLS_BINDIR}" && \
-		go install \
-			github.com/golangci/golangci-lint/cmd/golangci-lint \
-			gotest.tools/gotestsum && \
-		cd ..
+setup: zookeeper
 
 .PHONY: lint
-lint: tools
+lint: golangci-lint
 	go vet ./...
-	$(GOLANGCI_LINT_BIN) run -v --deadline 10m
+	$(GOLANGCILINT) run -v --deadline 10m
 
 .PHONY: lint-fix
-lint-fix: tools
+lint-fix: golangci-lint
 	go fmt ./...
 	go vet ./...
-	$(GOLANGCI_LINT_BIN) run -v --deadline 10m --fix
+	$(GOLANGCILINT) run -v --deadline 10m --fix
 
 .PHONY: build
 build:
 	go build ./...
 
 .PHONY: test
-test: tools build zookeeper
-	ZK_VERSION=$(ZK_VERSION) $(GOTESTSUM_BIN) --format dots -- -timeout 500s -v -race -covermode atomic -coverprofile=profile.cov $(PACKAGES)
+test: gotestsum build zookeeper
+	ZK_VERSION=$(ZK_VERSION) $(GOTESTSUM) --format dots -- -timeout 500s -v -race -covermode atomic -coverprofile profile.cov $(PACKAGES)
 
 .PHONY: clean
 clean:
@@ -70,4 +67,22 @@ clean:
 	rm -rf zookeeper-*/
 	rm -f zookeeper
 	rm -f profile.cov
-	rm -rf tools/bin
+
+LOCALBIN ?= $(shell pwd)/bin
+
+$(LOCALBIN):
+	mkdir -p $(LOCALBIN)
+
+## Tool Binaries
+GOLANGCILINT ?= $(LOCALBIN)/golangci-lint
+GOTESTSUM ?= $(LOCALBIN)/gotestsum
+
+.PHONY: golangci-lint
+golangci-lint: $(GOLANGCILINT) ## Download golangci-lint locally if necessary.
+$(GOLANGCILINT): $(LOCALBIN)
+	test -s $(LOCALBIN)/golangci-lint || GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/cmd/golangci-lint@v${GOLANGCILINT_VERSION}
+
+.PHONY: gotestsum
+gotestsum: $(GOTESTSUM) ## Download gotestsum locally if necessary.
+$(GOTESTSUM): $(LOCALBIN)
+	test -s $(LOCALBIN)/gotestsum || GOBIN=$(LOCALBIN) go install gotest.tools/gotestsum@v${GOTESTSUM_VERSION}

@@ -134,9 +134,5 @@ func (w *TreeWalker) walkDepthFirst(ctx context.Context, path string, visitor Vi
 		}
 	}
 
-	if err = visitor(ctx, path, stat); err != nil {
-		return err
-	}
-
-	return nil
+	return visitor(ctx, path, stat)
 }

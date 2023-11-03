@@ -43,32 +43,32 @@ func (m *TreeCacheListenerMock) OnSyncStarted() {
 	m.onSyncStartedCalled++
 }
 
-func (m *TreeCacheListenerMock) OnSyncStopped(err error) {
+func (m *TreeCacheListenerMock) OnSyncStopped(_ error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onSyncStoppedCalled++
 }
 
-func (m *TreeCacheListenerMock) OnSyncError(err error) {
+func (m *TreeCacheListenerMock) OnSyncError(_ error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onSyncErrorCalled++
 }
 
-func (m *TreeCacheListenerMock) OnTreeSynced(elapsed time.Duration) {
+func (m *TreeCacheListenerMock) OnTreeSynced(_ time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onTreeSyncedCalled++
 }
 
-func (m *TreeCacheListenerMock) OnNodeCreated(path string, data []byte, stat *Stat) {
+func (m *TreeCacheListenerMock) OnNodeCreated(path string, data []byte, _ *Stat) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onNodeCreatedCalled++
 	m.nodesCreated[path] = data
 }
 
-func (m *TreeCacheListenerMock) OnNodeDeleting(path string, data []byte, stat *Stat) {
+func (m *TreeCacheListenerMock) OnNodeDeleting(path string, data []byte, _ *Stat) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onNodeDeletingCalled++
@@ -82,7 +82,7 @@ func (m *TreeCacheListenerMock) OnNodeDeleted(path string) {
 	m.nodesDeleted[path] = path
 }
 
-func (m *TreeCacheListenerMock) OnNodeDataChanged(path string, data []byte, stat *Stat) {
+func (m *TreeCacheListenerMock) OnNodeDataChanged(path string, data []byte, _ *Stat) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onNodeDataChangedCalled++

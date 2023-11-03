@@ -1805,7 +1805,7 @@ func TestSetWatchers(t *testing.T) {
 					observedPathsDeleted = append(observedPathsDeleted, ev.Path)
 				} else if ev.Type == EventNodeCreated {
 					observedPathsCreated = append(observedPathsCreated, ev.Path)
-				} else if ev.Type == EventNodeChildrenChanged {
+				} else if ev.Type == EventNodeChildrenChanged { //nolint:revive
 					// Ignore this event.
 				} else {
 					t.Fatalf("Persistent-recursive watcher wrong event type %d", ev.Type)
