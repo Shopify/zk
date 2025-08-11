@@ -99,7 +99,7 @@ func TestParseSeq(t *testing.T) {
 		pyLock       = "da5719988c244fc793f49ec3aa29b566__lock__0000000003"
 	)
 
-	seq, err := parseSeq(goLock)
+	seq, err := ParseSeq(goLock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestParseSeq(t *testing.T) {
 		t.Fatalf("Expected 0 instead of %d", seq)
 	}
 
-	seq, err = parseSeq(negativeLock)
+	seq, err = ParseSeq(negativeLock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestParseSeq(t *testing.T) {
 		t.Fatalf("Expected -2147483648 instead of %d", seq)
 	}
 
-	seq, err = parseSeq(pyLock)
+	seq, err = ParseSeq(pyLock)
 	if err != nil {
 		t.Fatal(err)
 	}

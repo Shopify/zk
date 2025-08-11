@@ -35,7 +35,7 @@ func NewLock(c *Conn, path string, acl []ACL) *Lock {
 	}
 }
 
-func parseSeq(path string) (int, error) {
+func ParseSeq(path string) (int, error) {
 	parts := strings.Split(path, "lock-")
 	// python client uses a __LOCK__ prefix
 	if len(parts) == 1 {
@@ -106,7 +106,7 @@ func (l *Lock) LockWithDataCtx(ctx context.Context, data []byte) error {
 		return err
 	}
 
-	seq, err := parseSeq(path)
+	seq, err := ParseSeq(path)
 	if err != nil {
 		return err
 	}
@@ -130,7 +130,7 @@ func (l *Lock) LockWithDataCtx(ctx context.Context, data []byte) error {
 		prevSeq := -1
 		prevSeqPath := ""
 		for _, p := range children {
-			s, err := parseSeq(p)
+			s, err := ParseSeq(p)
 			if err != nil {
 				return err
 			}
