@@ -36,7 +36,7 @@ func NewLock(c *Conn, path string, acl []ACL) *Lock {
 }
 
 func ParseSeq(path string) (int, error) {
-	parts := strings.Split(path, "lock-")
+	parts := strings.Split(path, LockPrefix)
 	// python client uses a __LOCK__ prefix
 	if len(parts) == 1 {
 		parts = strings.Split(path, "__")
@@ -71,7 +71,7 @@ func (l *Lock) LockWithDataCtx(ctx context.Context, data []byte) error {
 		return ErrDeadlock
 	}
 
-	prefix := fmt.Sprintf("%s/lock-", l.path)
+	prefix := fmt.Sprintf("%s/%s", l.path, LockPrefix)
 	path := ""
 
 	var err error

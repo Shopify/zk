@@ -9,6 +9,8 @@ const (
 	protocolVersion = 0
 	// DefaultPort is the default port listened by server.
 	DefaultPort = 2181
+	// LockPrefix is the prefix used for lock nodes in ZooKeeper.
+	LockPrefix = "lock-"
 )
 
 const (

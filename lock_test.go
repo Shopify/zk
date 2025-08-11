@@ -93,9 +93,9 @@ func TestMultiLevelLock(t *testing.T) {
 }
 
 func TestParseSeq(t *testing.T) {
-	const (
-		goLock       = "_c_38553bd6d1d57f710ae70ddcc3d24715-lock-0000000000"
-		negativeLock = "_c_38553bd6d1d57f710ae70ddcc3d24715-lock--2147483648"
+	var (
+		goLock       = "_c_38553bd6d1d57f710ae70ddcc3d24715-" + LockPrefix + "0000000000"
+		negativeLock = "_c_38553bd6d1d57f710ae70ddcc3d24715-" + LockPrefix + "-2147483648"
 		pyLock       = "da5719988c244fc793f49ec3aa29b566__lock__0000000003"
 	)
 
