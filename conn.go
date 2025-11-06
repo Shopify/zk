@@ -1380,7 +1380,13 @@ func (c *Conn) CreateProtectedEphemeralSequentialCtx(ctx context.Context, path s
 		case ErrConnectionClosed:
 			children, _, err := c.ChildrenCtx(ctx, rootPath)
 			if err != nil {
-				return "", err
+				// Return the path with GUID for error handling
+				//
+				// If the connection is closed, it may re-establish, and
+				// the session might still be active, so we should
+				// return the base path for clients to recover from that
+				// situation.
+				return protectedPath, err
 			}
 			for _, p := range children {
 				parts := strings.Split(p, "/")
@@ -1393,7 +1399,7 @@ func (c *Conn) CreateProtectedEphemeralSequentialCtx(ctx context.Context, path s
 		case nil:
 			return newPath, nil
 		default:
-			return "", err
+			return protectedPath, err
 		}
 	}
 	return "", err
