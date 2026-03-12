@@ -694,6 +694,23 @@ func (tcn *treeCacheNode) ensureChild(name string) *treeCacheNode {
 	return c
 }
 
+// walk visits all nodes in the tree rooted at this node, calling fn for each.
+func (tcn *treeCacheNode) walk(path string, fn func(path string, node *treeCacheNode)) {
+	if path == "" {
+		path = "/"
+	}
+	fn(path, tcn)
+	for name, child := range tcn.children {
+		childPath := path
+		if childPath == "/" {
+			childPath = "/" + name
+		} else {
+			childPath = path + "/" + name
+		}
+		child.walk(childPath, fn)
+	}
+}
+
 func (tcn *treeCacheNode) deletePath(path string) {
 	n := tcn
 	prev := n
