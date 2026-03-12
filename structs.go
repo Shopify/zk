@@ -417,7 +417,7 @@ func decodePacket(buf []byte, st any) (n int, err error) {
 	}()
 
 	v := reflect.ValueOf(st)
-	if v.Kind() != reflect.Ptr || v.IsNil() {
+	if v.Kind() != reflect.Pointer || v.IsNil() {
 		return 0, ErrPtrExpected
 	}
 	return decodePacketValue(buf, v)
@@ -426,7 +426,7 @@ func decodePacket(buf []byte, st any) (n int, err error) {
 func decodePacketValue(buf []byte, v reflect.Value) (int, error) {
 	rv := v
 	kind := v.Kind()
-	if kind == reflect.Ptr {
+	if kind == reflect.Pointer {
 		if v.IsNil() {
 			v.Set(reflect.New(v.Type().Elem()))
 		}
@@ -444,8 +444,7 @@ func decodePacketValue(buf []byte, v reflect.Value) (int, error) {
 		} else if de, ok := v.Interface().(decoder); ok {
 			return de.Decode(buf)
 		} else {
-			for i := 0; i < v.NumField(); i++ {
-				field := v.Field(i)
+			for _, field := range v.Fields() {
 				n2, err := decodePacketValue(buf[n:], field)
 				n += n2
 				if err != nil {
@@ -473,7 +472,7 @@ func decodePacketValue(buf []byte, v reflect.Value) (int, error) {
 			n += 4
 			values := reflect.MakeSlice(v.Type(), count, count)
 			v.Set(values)
-			for i := 0; i < count; i++ {
+			for i := range count {
 				n2, err := decodePacketValue(buf[n:], values.Index(i))
 				n += n2
 				if err != nil {
@@ -508,7 +507,7 @@ func encodePacket(buf []byte, st any) (n int, err error) {
 	}()
 
 	v := reflect.ValueOf(st)
-	if v.Kind() != reflect.Ptr || v.IsNil() {
+	if v.Kind() != reflect.Pointer || v.IsNil() {
 		return 0, ErrPtrExpected
 	}
 	return encodePacketValue(buf, v)
@@ -516,7 +515,7 @@ func encodePacket(buf []byte, st any) (n int, err error) {
 
 func encodePacketValue(buf []byte, v reflect.Value) (int, error) {
 	rv := v
-	for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
 		v = v.Elem()
 	}
 
@@ -530,8 +529,7 @@ func encodePacketValue(buf []byte, v reflect.Value) (int, error) {
 		} else if en, ok := v.Interface().(encoder); ok {
 			return en.Encode(buf)
 		} else {
-			for i := 0; i < v.NumField(); i++ {
-				field := v.Field(i)
+			for _, field := range v.Fields() {
 				n2, err := encodePacketValue(buf[n:], field)
 				n += n2
 				if err != nil {
@@ -563,7 +561,7 @@ func encodePacketValue(buf []byte, v reflect.Value) (int, error) {
 			count := v.Len()
 			startN := n
 			n += 4
-			for i := 0; i < count; i++ {
+			for i := range count {
 				n2, err := encodePacketValue(buf[n:], v.Index(i))
 				n += n2
 				if err != nil {

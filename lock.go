@@ -75,24 +75,24 @@ func (l *Lock) LockWithDataCtx(ctx context.Context, data []byte) error {
 	path := ""
 
 	var err error
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		path, err = l.c.CreateProtectedEphemeralSequentialCtx(ctx, prefix, data, l.acl)
-		if err == ErrNoNode {
+		if errors.Is(err, ErrNoNode) {
 			// Create parent node.
 			parts := strings.Split(l.path, "/")
-			pth := ""
+			var pth strings.Builder
 			for _, p := range parts[1:] {
 				var exists bool
-				pth += "/" + p
-				exists, _, err = l.c.ExistsCtx(ctx, pth)
+				pth.WriteString("/" + p)
+				exists, _, err = l.c.ExistsCtx(ctx, pth.String())
 				if err != nil {
 					return err
 				}
 				if exists {
 					continue
 				}
-				_, err = l.c.CreateCtx(ctx, pth, []byte{}, 0, l.acl)
-				if err != nil && err != ErrNodeExists {
+				_, err = l.c.CreateCtx(ctx, pth.String(), []byte{}, 0, l.acl)
+				if err != nil && !errors.Is(err, ErrNodeExists) {
 					return err
 				}
 			}
@@ -151,9 +151,9 @@ func (l *Lock) LockWithDataCtx(ctx context.Context, data []byte) error {
 
 		// Wait on the node next in line for the lock
 		_, _, ch, err := l.c.GetWCtx(ctx, l.path+"/"+prevSeqPath)
-		if err != nil && err != ErrNoNode {
+		if err != nil && !errors.Is(err, ErrNoNode) {
 			return err
-		} else if err != nil && err == ErrNoNode {
+		} else if errors.Is(err, ErrNoNode) {
 			// try again
 			continue
 		}

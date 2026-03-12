@@ -12,6 +12,22 @@ import (
 	"time"
 )
 
+// Regex pattern components for parsing FLW output.
+const (
+	zrVer   = `^Zookeeper version: ([A-Za-z0-9\.\-]+), built on (\d\d/\d\d/\d\d\d\d \d\d:\d\d [A-Za-z0-9:\+\-]+)`
+	zrLat   = `^Latency min/avg/max: (\d+)/([0-9.]+)/(\d+)`
+	zrNet   = `^Received: (\d+).*\n^Sent: (\d+).*\n^Connections: (\d+).*\n^Outstanding: (\d+)`
+	zrState = `^Zxid: (0x[A-Za-z0-9]+).*\n^Mode: (\w+).*\n^Node count: (\d+)`
+	zrAddr  = `^ /((?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):(?:\d+))\[\d+\]`
+	zrPac   = `\(queued=(\d+),recved=(\d+),sent=(\d+),sid=(0x[A-Za-z0-9]+),lop=(\w+),est=(\d+),to=(\d+),`
+	zrSesh  = `lcxid=(0x[A-Za-z0-9]+),lzxid=(0x[A-Za-z0-9]+),lresp=(\d+),llat=(\d+),minlat=(\d+),avglat=(\d+),maxlat=(\d+)\)`
+)
+
+var (
+	reSrvr = regexp.MustCompile(`(?m:\A` + zrVer + `.*\n` + zrLat + `.*\n` + zrNet + `.*\n` + zrState + `)`)
+	reCons = regexp.MustCompile(zrAddr + zrPac + zrSesh)
+)
+
 // FLWSrvr is a FourLetterWord helper function. In particular, this function pulls the srvr output
 // from the zookeeper instances and parses the output. A slice of *ServerStats structs are returned
 // as well as a boolean value to indicate whether this function processed successfully.
@@ -21,20 +37,6 @@ import (
 // servers had an issue and the "Error" value in the struct should be inspected to determine
 // which server had the issue.
 func FLWSrvr(servers []string, timeout time.Duration) ([]*ServerStats, bool) {
-	// different parts of the regular expression that are required to parse the srvr output
-	const (
-		zrVer   = `^Zookeeper version: ([A-Za-z0-9\.\-]+), built on (\d\d/\d\d/\d\d\d\d \d\d:\d\d [A-Za-z0-9:\+\-]+)`
-		zrLat   = `^Latency min/avg/max: (\d+)/([0-9.]+)/(\d+)`
-		zrNet   = `^Received: (\d+).*\n^Sent: (\d+).*\n^Connections: (\d+).*\n^Outstanding: (\d+)`
-		zrState = `^Zxid: (0x[A-Za-z0-9]+).*\n^Mode: (\w+).*\n^Node count: (\d+)`
-	)
-
-	// build the regex from the pieces above
-	re, err := regexp.Compile(fmt.Sprintf(`(?m:\A%v.*\n%v.*\n%v.*\n%v)`, zrVer, zrLat, zrNet, zrState))
-	if err != nil {
-		return nil, false
-	}
-
 	imOk := true
 	servers = FormatServers(servers)
 	ss := make([]*ServerStats, len(servers))
@@ -48,7 +50,7 @@ func FLWSrvr(servers []string, timeout time.Duration) ([]*ServerStats, bool) {
 			continue
 		}
 
-		matches := re.FindAllStringSubmatch(string(response), -1)
+		matches := reSrvr.FindAllStringSubmatch(string(response), -1)
 
 		if matches == nil {
 			err := fmt.Errorf("unable to parse fields from zookeeper response (no regex matches)")
@@ -152,17 +154,6 @@ func FLWRuok(servers []string, timeout time.Duration) []bool {
 // As with FLWSrvr, the boolean value indicates whether one of the requests had
 // an issue. The Clients struct has an Error value that can be checked.
 func FLWCons(servers []string, timeout time.Duration) ([]*ServerClients, bool) {
-	const (
-		zrAddr = `^ /((?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):(?:\d+))\[\d+\]`
-		zrPac  = `\(queued=(\d+),recved=(\d+),sent=(\d+),sid=(0x[A-Za-z0-9]+),lop=(\w+),est=(\d+),to=(\d+),`
-		zrSesh = `lcxid=(0x[A-Za-z0-9]+),lzxid=(0x[A-Za-z0-9]+),lresp=(\d+),llat=(\d+),minlat=(\d+),avglat=(\d+),maxlat=(\d+)\)`
-	)
-
-	re, err := regexp.Compile(fmt.Sprintf("%v%v%v", zrAddr, zrPac, zrSesh))
-	if err != nil {
-		return nil, false
-	}
-
 	servers = FormatServers(servers)
 	sc := make([]*ServerClients, len(servers))
 	imOk := true
@@ -187,7 +178,7 @@ func FLWCons(servers []string, timeout time.Duration) ([]*ServerClients, bool) {
 				continue
 			}
 
-			m := re.FindAllStringSubmatch(string(line), -1)
+			m := reCons.FindAllStringSubmatch(string(line), -1)
 
 			if m == nil {
 				err := fmt.Errorf("unable to parse fields from zookeeper response (no regex matches)")

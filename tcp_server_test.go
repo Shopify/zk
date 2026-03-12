@@ -2,15 +2,15 @@ package zk
 
 import (
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"testing"
 	"time"
 )
 
 func WithListenServer(t *testing.T, test func(server string)) {
-	startPort := int(rand.Int31n(6000) + 10000)
-	server := fmt.Sprintf("localhost:%d", startPort)
+	startPort := int(rand.Int32N(6000) + 10000)
+	server := net.JoinHostPort("localhost", fmt.Sprint(startPort))
 	l, err := net.Listen("tcp", server)
 	if err != nil {
 		t.Fatalf("Failed to start listen server: %v", err)

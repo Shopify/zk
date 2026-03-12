@@ -2,6 +2,7 @@ package zk
 
 import (
 	"context"
+	"errors"
 	gopath "path"
 )
 
@@ -123,13 +124,13 @@ func (w *BatchTreeWalker) fetchChildrenBatch(ctx context.Context, paths []string
 	}
 
 	responses, err := w.conn.MultiReadCtx(ctx, requests...)
-	if err != nil && err != ErrNoNode { // Treat ErrNoNode as empty children.
+	if err != nil && !errors.Is(err, ErrNoNode) { // Treat ErrNoNode as empty children.
 		return nil, err
 	}
 
 	children := make([][]string, len(responses))
 	for i, r := range responses {
-		if r.Error == ErrNoNode {
+		if errors.Is(r.Error, ErrNoNode) {
 			continue // Treat ErrNoNode as empty children.
 		}
 		children[i] = r.Children

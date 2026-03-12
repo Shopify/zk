@@ -1,6 +1,7 @@
 package zk
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -61,7 +62,7 @@ func encodeDecodeTest(t *testing.T, r any) {
 func TestEncodeShortBuffer(t *testing.T) {
 	t.Parallel()
 	_, err := encodePacket([]byte{}, &requestHeader{1, 2})
-	if err != ErrShortBuffer {
+	if !errors.Is(err, ErrShortBuffer) {
 		t.Errorf("encodePacket should return ErrShortBuffer on a short buffer instead of '%+v'", err)
 		return
 	}
@@ -70,7 +71,7 @@ func TestEncodeShortBuffer(t *testing.T) {
 func TestDecodeShortBuffer(t *testing.T) {
 	t.Parallel()
 	_, err := decodePacket([]byte{}, &responseHeader{})
-	if err != ErrShortBuffer {
+	if !errors.Is(err, ErrShortBuffer) {
 		t.Errorf("decodePacket should return ErrShortBuffer on a short buffer instead of '%+v'", err)
 		return
 	}
@@ -81,7 +82,7 @@ func BenchmarkEncode(b *testing.B) {
 	st := &connectRequest{Passwd: []byte("1234567890")}
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := encodePacket(buf, st); err != nil {
 			b.Fatal(err)
 		}

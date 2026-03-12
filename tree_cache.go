@@ -313,13 +313,13 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 
 		// Fetch all the data in a single batch.
 		resps, err := tc.conn.MultiReadCtx(ctx, ops...)
-		if err != nil && err != ErrNoNode { // Ignore ErrNoNode.
+		if err != nil && !errors.Is(err, ErrNoNode) { // Ignore ErrNoNode.
 			return err
 		}
 
 		for i, r := range resps {
 			if r.Error != nil {
-				if r.Error == ErrNoNode {
+				if errors.Is(r.Error, ErrNoNode) {
 					continue // Skip missing node.
 				}
 				return r.Error
@@ -387,7 +387,7 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 				if tc.includeData {
 					data, stat, err := tc.conn.GetCtx(ctx, e.Path)
 					if err != nil {
-						if err == ErrNoNode {
+						if errors.Is(err, ErrNoNode) {
 							continue // We'll get an EventNodeDeleted later.
 						}
 						return err // We are out of sync.
@@ -412,7 +412,7 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 				if tc.includeData {
 					data, stat, err := tc.conn.GetCtx(ctx, e.Path)
 					if err != nil {
-						if err == ErrNoNode {
+						if errors.Is(err, ErrNoNode) {
 							continue // We'll get an EventNodeDeleted later.
 						}
 						return err // We are out of sync.
@@ -628,11 +628,12 @@ func (tc *TreeCache) Walker(path string, order TraversalOrder) *TreeWalker {
 func (tc *TreeCache) toInternalPath(externalPath string) (string, error) {
 	if tc.absolutePaths {
 		// We expect externalPath to be prefixed by rootPath.
-		if !strings.HasPrefix(externalPath, tc.rootPath) {
+		internalPath, ok := strings.CutPrefix(externalPath, tc.rootPath)
+		if !ok {
 			return "", fmt.Errorf("path %q was outside of cache scope: %q", externalPath, tc.rootPath)
 		}
 		// Ex: rootPath="/foo", externalPath="/foo/bar" => internalPath="/bar"
-		return externalPath[len(tc.rootPath):], nil
+		return internalPath, nil
 	}
 	// Path assumed to be relative to rootPath (ie: internalPath == externalPath).
 	// Ex: rootPath="/foo", externalPath="/bar" => internalPath="/bar"
@@ -656,7 +657,7 @@ type treeCacheNode struct {
 
 func (tcn *treeCacheNode) getPath(path string) (*treeCacheNode, bool) {
 	n := tcn
-	for _, name := range strings.Split(path, "/") {
+	for name := range strings.SplitSeq(path, "/") {
 		if name == "" {
 			continue
 		}
@@ -672,7 +673,7 @@ func (tcn *treeCacheNode) getPath(path string) (*treeCacheNode, bool) {
 
 func (tcn *treeCacheNode) ensurePath(path string) *treeCacheNode {
 	n := tcn
-	for _, name := range strings.Split(path, "/") {
+	for name := range strings.SplitSeq(path, "/") {
 		if name == "" {
 			continue
 		}
@@ -696,7 +697,7 @@ func (tcn *treeCacheNode) ensureChild(name string) *treeCacheNode {
 func (tcn *treeCacheNode) deletePath(path string) {
 	n := tcn
 	prev := n
-	for _, name := range strings.Split(path, "/") {
+	for name := range strings.SplitSeq(path, "/") {
 		if name == "" {
 			continue
 		}

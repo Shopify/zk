@@ -3,7 +3,8 @@ package zk
 import (
 	"fmt"
 	"io"
-	"math/rand"
+	"math/rand/v2"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,7 +78,7 @@ func StartTestCluster(t *testing.T, size int, stdout, stderr io.Writer) (*TestCl
 	requireNoError(t, err, "failed to create tmp dir for test server setup")
 
 	success := false
-	startPort := int(rand.Int31n(6000) + 10000)
+	startPort := int(rand.Int32N(6000) + 10000)
 	cluster := &TestCluster{Path: tmpPath}
 
 	defer func() {
@@ -86,7 +87,7 @@ func StartTestCluster(t *testing.T, size int, stdout, stderr io.Writer) (*TestCl
 		}
 	}()
 
-	for serverN := 0; serverN < size; serverN++ {
+	for serverN := range size {
 		srvPath := filepath.Join(tmpPath, fmt.Sprintf("srv%d", serverN+1))
 		requireNoError(t, os.Mkdir(srvPath, 0700), "failed to make server path")
 
@@ -96,7 +97,7 @@ func StartTestCluster(t *testing.T, size int, stdout, stderr io.Writer) (*TestCl
 			DataDir:    srvPath,
 		}
 
-		for i := 0; i < size; i++ {
+		for i := range size {
 			serverNConfig := ServerConfigServer{
 				ID:                 i + 1,
 				Host:               "127.0.0.1",
@@ -148,7 +149,7 @@ func StartTestCluster(t *testing.T, size int, stdout, stderr io.Writer) (*TestCl
 }
 
 func (tc *TestCluster) Connect(idx int) (*Conn, <-chan Event, error) {
-	return Connect([]string{fmt.Sprintf("127.0.0.1:%d", tc.Servers[idx].Port)}, time.Second*15)
+	return Connect([]string{net.JoinHostPort("127.0.0.1", fmt.Sprint(tc.Servers[idx].Port))}, time.Second*15)
 }
 
 func (tc *TestCluster) ConnectAll() (*Conn, <-chan Event, error) {
@@ -162,7 +163,7 @@ func (tc *TestCluster) ConnectAllTimeout(sessionTimeout time.Duration) (*Conn, <
 func (tc *TestCluster) ConnectWithOptions(sessionTimeout time.Duration, options ...connOption) (*Conn, <-chan Event, error) {
 	hosts := make([]string, len(tc.Servers))
 	for i, srv := range tc.Servers {
-		hosts[i] = fmt.Sprintf("127.0.0.1:%d", srv.Port)
+		hosts[i] = net.JoinHostPort("127.0.0.1", fmt.Sprint(srv.Port))
 	}
 	zk, ch, err := Connect(hosts, sessionTimeout, options...)
 	return zk, ch, err
@@ -181,10 +182,10 @@ func (tc *TestCluster) waitForStart(maxRetry int, interval time.Duration) error 
 	// verify that the servers are up with SRVR
 	serverAddrs := make([]string, len(tc.Servers))
 	for i, s := range tc.Servers {
-		serverAddrs[i] = fmt.Sprintf("127.0.0.1:%d", s.Port)
+		serverAddrs[i] = net.JoinHostPort("127.0.0.1", fmt.Sprint(s.Port))
 	}
 
-	for i := 0; i < maxRetry; i++ {
+	for range maxRetry {
 		_, ok := FLWSrvr(serverAddrs, time.Second)
 		if ok {
 			return nil
@@ -200,7 +201,7 @@ func (tc *TestCluster) waitForStop(maxRetry int, interval time.Duration) error {
 	// verify that the servers are up with RUOK
 	serverAddrs := make([]string, len(tc.Servers))
 	for i, s := range tc.Servers {
-		serverAddrs[i] = fmt.Sprintf("127.0.0.1:%d", s.Port)
+		serverAddrs[i] = net.JoinHostPort("127.0.0.1", fmt.Sprint(s.Port))
 	}
 
 	var success bool
@@ -275,7 +276,7 @@ func (tc *TestCluster) StopAllServers() error {
 	return nil
 }
 
-func requireNoError(t *testing.T, err error, msgAndArgs ...interface{}) {
+func requireNoError(t *testing.T, err error, msgAndArgs ...any) {
 	if err != nil {
 		t.Logf("received unexpected error: %v", err)
 		t.Fatal(msgAndArgs...)

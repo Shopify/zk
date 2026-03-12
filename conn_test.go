@@ -2,6 +2,7 @@ package zk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -13,7 +14,7 @@ import (
 func TestRecurringReAuthHang(t *testing.T) {
 	WithTestCluster(t, 3, io.Discard, io.Discard, func(t *testing.T, tc *TestCluster) {
 		WithConnectAll(t, tc, func(t *testing.T, c *Conn, ech <-chan Event) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second*5)
 			defer cancel()
 
 			if err := waitForSession(ctx, c, ech); err != nil {
@@ -25,11 +26,11 @@ func TestRecurringReAuthHang(t *testing.T) {
 				t.Fatalf("Failed to add auth %s", err)
 			}
 
-			var reauthCloseOnce sync.Once
 			reauthSig := make(chan struct{}, 1)
+			closeReauthSig := sync.OnceFunc(func() { close(reauthSig) })
 			c.resendZkAuthFn = func(ctx context.Context, c *Conn) error {
 				// in current implimentation the reauth might be called more than once based on various conditions
-				reauthCloseOnce.Do(func() { close(reauthSig) })
+				closeReauthSig()
 				return resendZkAuth(ctx, c)
 			}
 
@@ -37,7 +38,7 @@ func TestRecurringReAuthHang(t *testing.T) {
 			currentServer := c.Server()
 			tc.StopServer(currentServer)
 			// wait connect to new zookeeper.
-			ctx, cancel = context.WithTimeout(context.Background(), time.Second*5)
+			ctx, cancel = context.WithTimeout(t.Context(), time.Second*5)
 			defer cancel()
 
 			if err := waitForSession(ctx, c, ech); err != nil {
@@ -78,7 +79,7 @@ func TestConcurrentReadAndClose(t *testing.T) {
 
 		select {
 		case <-okChan:
-			if setErr != ErrConnectionClosed {
+			if !errors.Is(setErr, ErrConnectionClosed) {
 				t.Fatalf("unexpected error returned from Set %v", setErr)
 			}
 		case <-time.After(3 * time.Second):
@@ -88,14 +89,22 @@ func TestConcurrentReadAndClose(t *testing.T) {
 }
 
 func TestDeadlockInClose(t *testing.T) {
+	shouldQuit := make(chan struct{})
 	c := &Conn{
-		shouldQuit:     make(chan struct{}),
+		shouldQuit:     shouldQuit,
 		connectTimeout: 1 * time.Second,
 		sendChan:       make(chan *request, sendChanSize),
 		logger:         DefaultLogger,
 	}
+	c.closeFn = sync.OnceFunc(func() {
+		close(shouldQuit)
+		select {
+		case <-c.queueRequest(context.Background(), opClose, nil, nil, nil):
+		case <-time.After(time.Second):
+		}
+	})
 
-	for i := 0; i < sendChanSize; i++ {
+	for range sendChanSize {
 		c.sendChan <- &request{}
 	}
 

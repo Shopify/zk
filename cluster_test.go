@@ -1,6 +1,7 @@
 package zk
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -101,8 +102,8 @@ func TestNoQuorum(t *testing.T) {
 		if hasSessionEvent1 == nil {
 			t.Fatalf("Failed to connect and get session")
 		}
-		initialSessionID := c.sessionID
-		DefaultLogger.Printf("    Session established: id=%d, timeout=%d", c.sessionID, c.sessionTimeoutMs)
+		initialSessionID := c.sessionID.Load()
+		DefaultLogger.Printf("    Session established: id=%d, timeout=%d", c.sessionID.Load(), c.sessionTimeoutMs)
 
 		// Kill the ZooKeeper leader and wait for the session to reconnect.
 		DefaultLogger.Printf("    Kill the leader")
@@ -168,8 +169,8 @@ func TestNoQuorum(t *testing.T) {
 		if hasSessionEvent3 == nil {
 			t.Fatalf("Session has not been reconnected")
 		}
-		if c.sessionID != initialSessionID {
-			t.Fatalf("Wrong session ID: expected=%d, actual=%d", initialSessionID, c.sessionID)
+		if c.sessionID.Load() != initialSessionID {
+			t.Fatalf("Wrong session ID: expected=%d, actual=%d", initialSessionID, c.sessionID.Load())
 		}
 
 		// Make sure that the session is not dropped soon after reconnect
@@ -221,14 +222,14 @@ func TestBadSession(t *testing.T) {
 		}
 		defer c.Close()
 
-		if err := c.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+		if err := c.Delete("/gozk-test", -1); err != nil && !errors.Is(err, ErrNoNode) {
 			t.Fatalf("Delete returned error: %+v", err)
 		}
 
 		c.conn.Close()
 		time.Sleep(time.Millisecond * 100)
 
-		if err := c.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+		if err := c.Delete("/gozk-test", -1); err != nil && !errors.Is(err, ErrNoNode) {
 			t.Fatalf("Delete returned error: %+v", err)
 		}
 	})
@@ -243,9 +244,7 @@ type EventLogger struct {
 
 func NewStateLogger(eventCh <-chan Event) *EventLogger {
 	el := &EventLogger{}
-	el.wg.Add(1)
-	go func() {
-		defer el.wg.Done()
+	el.wg.Go(func() {
 		for event := range eventCh {
 			el.lock.Lock()
 			for _, sw := range el.watchers {
@@ -258,7 +257,7 @@ func NewStateLogger(eventCh <-chan Event) *EventLogger {
 			el.events = append(el.events, event)
 			el.lock.Unlock()
 		}
-	}()
+	})
 	return el
 }
 

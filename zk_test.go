@@ -4,15 +4,16 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
-	mathrand "math/rand"
+	mathrand "math/rand/v2"
 	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,7 +72,7 @@ func TestCreate(t *testing.T) {
 		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
 			path := "/gozk-test"
 
-			if err := c.Delete(path, -1); err != nil && err != ErrNoNode {
+			if err := c.Delete(path, -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
 			if p, err := c.Create(path, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
@@ -97,13 +98,13 @@ func TestCreateTTL(t *testing.T) {
 		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
 			path := "/gozk-test"
 
-			if err := c.Delete(path, -1); err != nil && err != ErrNoNode {
+			if err := c.Delete(path, -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
-			if _, err := c.CreateTTL("", []byte{1, 2, 3, 4}, FlagTTL|FlagEphemeral, WorldACL(PermAll), 60*time.Second); err != ErrInvalidPath {
+			if _, err := c.CreateTTL("", []byte{1, 2, 3, 4}, FlagTTL|FlagEphemeral, WorldACL(PermAll), 60*time.Second); !errors.Is(err, ErrInvalidPath) {
 				t.Fatalf("Create path check failed")
 			}
-			if _, err := c.CreateTTL(path, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll), 60*time.Second); err != ErrInvalidFlags {
+			if _, err := c.CreateTTL(path, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll), 60*time.Second); !errors.Is(err, ErrInvalidFlags) {
 				t.Fatalf("Create flags check failed")
 			}
 			if p, err := c.CreateTTL(path, []byte{1, 2, 3, 4}, FlagTTL|FlagEphemeral, WorldACL(PermAll), 60*time.Second); err != nil {
@@ -119,7 +120,7 @@ func TestCreateTTL(t *testing.T) {
 				t.Fatal("Get returned wrong size data")
 			}
 
-			if err := c.Delete(path, -1); err != nil && err != ErrNoNode {
+			if err := c.Delete(path, -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
 			if p, err := c.CreateTTL(path, []byte{1, 2, 3, 4}, FlagTTL|FlagSequence, WorldACL(PermAll), 60*time.Second); err != nil {
@@ -144,13 +145,13 @@ func TestCreateContainer(t *testing.T) {
 		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
 			path := "/gozk-test"
 
-			if err := c.Delete(path, -1); err != nil && err != ErrNoNode {
+			if err := c.Delete(path, -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
-			if _, err := c.CreateContainer("", []byte{1, 2, 3, 4}, FlagTTL, WorldACL(PermAll)); err != ErrInvalidPath {
+			if _, err := c.CreateContainer("", []byte{1, 2, 3, 4}, FlagTTL, WorldACL(PermAll)); !errors.Is(err, ErrInvalidPath) {
 				t.Fatalf("Create path check failed")
 			}
-			if _, err := c.CreateContainer(path, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != ErrInvalidFlags {
+			if _, err := c.CreateContainer(path, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); !errors.Is(err, ErrInvalidFlags) {
 				t.Fatalf("Create flags check failed")
 			}
 			if p, err := c.CreateContainer(path, []byte{1, 2, 3, 4}, FlagTTL, WorldACL(PermAll)); err != nil {
@@ -188,7 +189,7 @@ func TestDelete(t *testing.T) {
 			}
 
 			// Second delete fails with ErrNoNode.
-			if err := c.Delete(path, -1); err != nil && err != ErrNoNode {
+			if err := c.Delete(path, -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Expected ErrNoNode, but got: %+v", err)
 			}
 		})
@@ -214,7 +215,7 @@ func TestIncrementalReconfig(t *testing.T) {
 			_ = os.RemoveAll(path)
 		}(tmpPath)
 
-		startPort := int(mathrand.Int31n(6000) + 10000)
+		startPort := int(mathrand.Int32N(6000) + 10000)
 
 		srvPath := filepath.Join(tmpPath, "srv4")
 		if err := os.Mkdir(srvPath, 0700); err != nil {
@@ -258,7 +259,7 @@ func TestIncrementalReconfig(t *testing.T) {
 			err = c.AddAuth("digest", []byte("super:test"))
 			requireNoError(t, err, "failed to auth to cluster")
 
-			waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			waitCtx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
 
 			err = waitForSession(waitCtx, c, ech)
@@ -275,7 +276,7 @@ func TestIncrementalReconfig(t *testing.T) {
 
 			// remove node 3.
 			_, err = c.IncrementalReconfig(nil, []string{"3"}, -1)
-			if err != nil && err == ErrConnectionClosed {
+			if err != nil && errors.Is(err, ErrConnectionClosed) {
 				t.Log("conneciton closed is fine since the cluster re-elects and we dont reconnect")
 			} else {
 				requireNoError(t, err, "failed to remove node from cluster")
@@ -284,7 +285,7 @@ func TestIncrementalReconfig(t *testing.T) {
 			// add node a new 4th node
 			server := fmt.Sprintf("server.%d=%s:%d:%d;%d", testSrvConfig.ID, testSrvConfig.Host, testSrvConfig.PeerPort, testSrvConfig.LeaderElectionPort, cfg.ClientPort)
 			_, err = c.IncrementalReconfig([]string{server}, nil, -1)
-			if err != nil && err == ErrConnectionClosed {
+			if err != nil && errors.Is(err, ErrConnectionClosed) {
 				t.Log("conneciton closed is fine since the cluster re-elects and we dont reconnect")
 			} else {
 				requireNoError(t, err, "failed to add new server to cluster")
@@ -309,7 +310,7 @@ func TestReconfig(t *testing.T) {
 			err := c.AddAuth("digest", []byte("super:test"))
 			requireNoError(t, err, "failed to auth to cluster")
 
-			waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			waitCtx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
 
 			err = waitForSession(waitCtx, c, ech)
@@ -351,7 +352,7 @@ func TestOpsAfterCloseDontDeadlock(t *testing.T) {
 			errs := make(chan error, 1)
 			go func() {
 				defer close(errs)
-				for i := 0; i < 30; i++ {
+				for range 30 {
 					if _, err := c.Create(path, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err == nil {
 						errs <- fmt.Errorf("expected Create to return an error, got nil")
 						return
@@ -377,7 +378,7 @@ func TestMulti(t *testing.T) {
 		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
 			path := "/gozk-test"
 
-			if err := c.Delete(path, -1); err != nil && err != ErrNoNode {
+			if err := c.Delete(path, -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
 
@@ -415,7 +416,7 @@ func TestMulti(t *testing.T) {
 				t.Fatalf("Multi returned unexpected error: %+v", err)
 			} else if len(res) != 2 {
 				t.Fatalf("Expected 2 responses got %d", len(res))
-			} else if res[0].Error != ErrBadVersion {
+			} else if !errors.Is(res[0].Error, ErrBadVersion) {
 				t.Fatalf("Expected ErrBadVersion got %+v", res[0].Error)
 			} else {
 				t.Logf("%+v", res)
@@ -520,20 +521,15 @@ func TestIfAuthdataSurvivesReconnect(t *testing.T) {
 			acl := DigestACL(PermAll, "userfoo", "passbar")
 
 			_, err := c.Create(testNode, []byte("Some very secret content"), 0, acl)
-			if err != nil && err != ErrNodeExists {
+			if err != nil && !errors.Is(err, ErrNodeExists) {
 				t.Fatalf("Failed to create test node : %+v", err)
 			}
 
 			_, _, err = c.Get(testNode)
-			if err == nil || err != ErrNoAuth {
-				var msg string
-
-				if err == nil {
-					msg = "Fetching data without auth should have resulted in an error"
-				} else {
-					msg = fmt.Sprintf("Expecting ErrNoAuth, got `%+v` instead", err)
-				}
-				t.Fatalf(msg)
+			if err == nil {
+				t.Fatal("Fetching data without auth should have resulted in an error")
+			} else if !errors.Is(err, ErrNoAuth) {
+				t.Fatalf("Expecting ErrNoAuth, got `%+v` instead", err)
 			}
 
 			err = c.AddAuth("digest", []byte("userfoo:passbar"))
@@ -569,7 +565,7 @@ func TestMultiFailures(t *testing.T) {
 		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
 			// Ensure firstPath doesn't exist and secondPath does. This will cause the
 			// 2nd operation in the Multi() to fail.
-			if err := c.Delete(firstPath, -1); err != nil && err != ErrNoNode {
+			if err := c.Delete(firstPath, -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
 			if _, err := c.Create(secondPath, nil /* data */, 0, WorldACL(PermAll)); err != nil {
@@ -581,7 +577,7 @@ func TestMultiFailures(t *testing.T) {
 				&CreateRequest{Path: secondPath, Data: []byte{3, 4}, Acl: WorldACL(PermAll)},
 			}
 			res, err := c.Multi(ops...)
-			if err != ErrNodeExists {
+			if !errors.Is(err, ErrNodeExists) {
 				t.Fatalf("Multi() didn't return correct error: %+v", err)
 			}
 			if len(res) != 2 {
@@ -590,10 +586,10 @@ func TestMultiFailures(t *testing.T) {
 			if res[0].Error != nil {
 				t.Fatalf("First operation returned an unexpected error %+v", res[0].Error)
 			}
-			if res[1].Error != ErrNodeExists {
+			if !errors.Is(res[1].Error, ErrNodeExists) {
 				t.Fatalf("Second operation returned incorrect error %+v", res[1].Error)
 			}
-			if _, _, err := c.Get(firstPath); err != ErrNoNode {
+			if _, _, err := c.Get(firstPath); !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Node %s was incorrectly created: %+v", firstPath, err)
 			}
 		})
@@ -611,7 +607,7 @@ func TestGetSetACL(t *testing.T) {
 
 			path := "/gozk-test"
 
-			if err := c.Delete(path, -1); err != nil && err != ErrNoNode {
+			if err := c.Delete(path, -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
 			if path, err := c.Create(path, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
@@ -655,7 +651,7 @@ func TestAuth(t *testing.T) {
 	WithTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
 		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
 			path := "/gozk-digest-test"
-			if err := c.Delete(path, -1); err != nil && err != ErrNoNode {
+			if err := c.Delete(path, -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
 
@@ -667,7 +663,7 @@ func TestAuth(t *testing.T) {
 				t.Fatalf("Create returned different path '%s' != '%s'", p, path)
 			}
 
-			if _, _, err := c.Get(path); err != ErrNoAuth {
+			if _, _, err := c.Get(path); !errors.Is(err, ErrNoAuth) {
 				t.Fatalf("Get returned error %+v instead of ErrNoAuth", err)
 			}
 
@@ -700,7 +696,7 @@ func TestChildren(t *testing.T) {
 	WithTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
 		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
 			deleteNode := func(node string) {
-				if err := c.Delete(node, -1); err != nil && err != ErrNoNode {
+				if err := c.Delete(node, -1); err != nil && !errors.Is(err, ErrNoNode) {
 					t.Fatalf("Delete returned error: %+v", err)
 				}
 			}
@@ -716,7 +712,7 @@ func TestChildren(t *testing.T) {
 			rb := make([]byte, 1000)
 			hb := make([]byte, 2000)
 			prefix := []byte("/gozk-test-big/")
-			for i := 0; i < 1000; i++ {
+			for i := range 1000 {
 				_, err := rand.Read(rb)
 				if err != nil {
 					t.Fatal("Cannot create random znode name")
@@ -753,7 +749,7 @@ func TestChildWatch(t *testing.T) {
 
 	WithTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
 		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
-			if err := c.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+			if err := c.Delete("/gozk-test", -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
 
@@ -808,7 +804,7 @@ func TestChildWatch(t *testing.T) {
 			}
 
 			// Delete of the watched node should trigger EventNodeDeleted
-			if err := c.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+			if err := c.Delete("/gozk-test", -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
 
@@ -892,7 +888,7 @@ func TestExistsWatch(t *testing.T) {
 
 	WithTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
 		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
-			if err := c.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+			if err := c.Delete("/gozk-test", -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
 
@@ -947,7 +943,7 @@ func TestExistsWatch(t *testing.T) {
 			}
 
 			// Delete of the watched node should trigger EventNodeDeleted.
-			if err := c.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+			if err := c.Delete("/gozk-test", -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
 
@@ -1029,7 +1025,7 @@ func TestAddPersistentWatch(t *testing.T) {
 
 	WithTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
 		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
-			if err := c.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+			if err := c.Delete("/gozk-test", -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
 
@@ -1062,7 +1058,7 @@ func TestAddPersistentWatch(t *testing.T) {
 			}
 
 			// Delete of child node should trigger EventNodeChildrenChanged
-			if err := c.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+			if err := c.Delete("/gozk-test", -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
 
@@ -1133,7 +1129,7 @@ func TestAddPersistentRecursiveWatch(t *testing.T) {
 
 	WithTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
 		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
-			if err := c.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+			if err := c.Delete("/gozk-test", -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
 
@@ -1166,7 +1162,7 @@ func TestAddPersistentRecursiveWatch(t *testing.T) {
 			}
 
 			// Delete of the child node should trigger EventNodeDeleted.
-			if err := c.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+			if err := c.Delete("/gozk-test", -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
 
@@ -1506,7 +1502,7 @@ func TestPersistentWatchStall(t *testing.T) {
 			// Create lots of paths to generate events, but with no consumer of watch events.
 			// This should cause the watcher to stall.
 		nodeLoop:
-			for i := 0; i < 3000; i++ {
+			for i := range 3000 {
 				path, err := c.Create(fmt.Sprintf("/gozk-test-%d", i), []byte{}, 0, WorldACL(PermAll))
 				if err != nil {
 					t.Fatalf("Create returned: %+v", err)
@@ -1574,7 +1570,7 @@ func TestSetWatchers(t *testing.T) {
 		}
 		defer c2.Close()
 
-		if err := c1.Delete("/gozk-test-x", -1); err != nil && err != ErrNoNode {
+		if err := c1.Delete("/gozk-test-x", -1); err != nil && !errors.Is(err, ErrNoNode) {
 			t.Fatalf("Delete returned error: %+v", err)
 		}
 		testPaths := map[string]<-chan Event{}
@@ -1589,7 +1585,7 @@ func TestSetWatchers(t *testing.T) {
 
 		// Create lots of paths for data expected that we expect to be restored on reconnect.
 		// There are too many expected for a single "setWatches2" request, so they will be spread across multiple packets.
-		for i := 0; i < 100; i++ {
+		for i := range 100 {
 			testPath, err := c1.Create(fmt.Sprintf("/gozk-test-%d", i), []byte{}, 0, WorldACL(PermAll))
 			if err != nil {
 				t.Fatalf("Create returned: %+v", err)
@@ -1644,7 +1640,7 @@ func TestSetWatchers(t *testing.T) {
 		// This would normally fire events on data and persistent watches, but the connection c1 is gone.
 		// We expect these events to arrive after reconnect of c1.
 		for p := range testPaths {
-			if err := c2.Delete(p, -1); err != nil && err != ErrNoNode {
+			if err := c2.Delete(p, -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
 		}
@@ -1864,7 +1860,7 @@ func TestExpiringWatch(t *testing.T) {
 
 	WithTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
 		WithConnectAll(t, tc, func(t *testing.T, c *Conn, _ <-chan Event) {
-			if err := c.Delete("/gozk-test", -1); err != nil && err != ErrNoNode {
+			if err := c.Delete("/gozk-test", -1); err != nil && !errors.Is(err, ErrNoNode) {
 				t.Fatalf("Delete returned error: %+v", err)
 			}
 
@@ -1877,12 +1873,12 @@ func TestExpiringWatch(t *testing.T) {
 				t.Fatal("Children should return at least 1 child")
 			}
 
-			c.sessionID = 99999
+			c.sessionID.Store(99999)
 			_ = c.conn.Close()
 
 			select {
 			case ev := <-childCh:
-				if ev.Err != ErrSessionExpired {
+				if !errors.Is(ev.Err, ErrSessionExpired) {
 					t.Fatalf("Child watcher error %+v instead of expected ErrSessionExpired", ev.Err)
 				}
 				if ev.Path != "/" {
@@ -1933,7 +1929,7 @@ func TestSlowServer(t *testing.T) {
 	t.Parallel()
 
 	WithTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
-		realAddr := fmt.Sprintf("127.0.0.1:%d", tc.Servers[0].Port)
+		realAddr := net.JoinHostPort("127.0.0.1", fmt.Sprint(tc.Servers[0].Port))
 		proxyAddr, stopCh, err := startSlowProxy(t,
 			Rate{}, Rate{},
 			realAddr, func(ln *Listener) {
@@ -2013,14 +2009,14 @@ func TestMaxBufferSize(t *testing.T) {
 			t.Fatalf("Create returned error: %+v", err)
 		}
 		var children []string
-		for i := 0; i < 4; i++ {
+		for range 4 {
 			childName, err := c.Create("/foo/child", nil, FlagEphemeral|FlagSequence, WorldACL(PermAll))
 			if err != nil {
 				t.Fatalf("Create returned error: %+v", err)
 			}
 			children = append(children, childName[len("/foo/"):]) // strip parent prefix from name
 		}
-		sort.Strings(children)
+		slices.Sort(children)
 
 		// Limited client works fine
 		resultData, _, err := cLimited.Get("/foo")
@@ -2034,14 +2030,14 @@ func TestMaxBufferSize(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Children returned error: %+v", err)
 		}
-		sort.Strings(resultChildren)
+		slices.Sort(resultChildren)
 		if !reflect.DeepEqual(resultChildren, children) {
 			t.Fatalf("Children returned unexpected names; expecting %+v, got %+v", children, resultChildren)
 		}
 
 		// With large node though...
 		data = make([]byte, 1024)
-		for i := 0; i < 1024; i++ {
+		for i := range 1024 {
 			data[i] = byte(i)
 		}
 		_, err = c.Create("/bar", data, 0, WorldACL(PermAll))
@@ -2067,7 +2063,7 @@ func TestMaxBufferSize(t *testing.T) {
 			children = append(children, n)
 			totalLen += len(n)
 		}
-		sort.Strings(children)
+		slices.Sort(children)
 		_, _, err = cLimited.Children("/bar")
 		expectErr(t, err, ErrConnectionClosed)
 		expectLogMessage(t, &l, "received packet from server with length .*, which exceeds max buffer size 1024")
@@ -2084,7 +2080,7 @@ func TestMaxBufferSize(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Children returned error: %+v", err)
 		}
-		sort.Strings(resultChildren)
+		slices.Sort(resultChildren)
 		if !reflect.DeepEqual(resultChildren, children) {
 			t.Fatalf("Children returned unexpected names; expecting %+v, got %+v", children, resultChildren)
 		}
@@ -2098,7 +2094,7 @@ func TestBatchWalker(t *testing.T) {
 			paths := createTree(t, c, "/gozk-test-batchtreewalker", 3, 20)
 			t.Logf("Tree created in %d ms", time.Since(startTime).Milliseconds())
 
-			sort.Strings(paths) // Sort so we can compare the results later.
+			slices.Sort(paths) // Sort so we can compare the results later.
 
 			runTest := func(t *testing.T, batchSize int) {
 				walker := c.BatchWalker("/gozk-test-batchtreewalker", batchSize)
@@ -2118,7 +2114,7 @@ func TestBatchWalker(t *testing.T) {
 					len(paths), numBatches, time.Since(startTime).Milliseconds())
 
 				// Verify that we got all the expected paths.
-				sort.Strings(visited) // Order doesn't matter
+				slices.Sort(visited) // Order doesn't matter
 				if !reflect.DeepEqual(visited, paths) {
 					t.Fatalf("Walk returned the wrong patchs, exptected %+v, got %+v", paths, visited)
 				}
@@ -2196,7 +2192,7 @@ func createTree(t *testing.T, c *Conn, root string, depth int, breadth int) []st
 
 func generateTreePaths(prefix string, depth int, breadth int) []string {
 	var paths []string
-	for i := 0; i < breadth; i++ {
+	for i := range breadth {
 		paths = append(paths, fmt.Sprintf("%s/%d", prefix, i))
 	}
 	if depth > 1 {
@@ -2298,7 +2294,7 @@ func expectErr(t *testing.T, err error, expected error) {
 	if err == nil {
 		t.Fatalf("Get for node that is too large should have returned error!")
 	}
-	if err != expected {
+	if !errors.Is(err, expected) {
 		t.Fatalf("Get returned wrong error; expecting ErrClosing, got %+v", err)
 	}
 }
