@@ -1,7 +1,8 @@
 package main
 
 import (
-	"log"
+	"context"
+	"log/slog"
 	"time"
 
 	"github.com/Shopify/zk"
@@ -14,42 +15,29 @@ func main() {
 	}
 	go func() {
 		for e := range events {
-			log.Printf("SessionEvent: %+v", e)
+			slog.Info("session event", "event", e)
 		}
-		log.Printf("SessionEvent closed")
+		slog.Info("session event channel closed")
 	}()
 
-	// Walk breath-first.
-	err = c.TreeWalker("/foo").
-		BreadthFirst().
-		Walk(func(p string, stat *zk.Stat) error {
-			log.Printf("Got %s", p)
+	ctx := context.Background()
+
+	// Walk with callback — use when the visitor can fail or needs error propagation.
+	err = c.Walker("/foo", zk.BreadthFirstOrder).
+		Walk(ctx, func(_ context.Context, p string, stat *zk.Stat) error {
+			slog.Info("visited node", "path", p, "version", stat.Version)
 			return nil
 		})
 	if err != nil {
 		panic(err)
 	}
 
-	// Walk depth-first and visit leaves only.
-	err = c.TreeWalker("/foo").
-		DepthFirst().
-		LeavesOnly().
-		Walk(func(p string, stat *zk.Stat) error {
-			log.Printf("Got %s", p)
-			return nil
-		})
-	if err != nil {
-		panic(err)
+	// Walk with iterator — use for simple collection/iteration.
+	nodes, walkErr := c.Walker("/foo", zk.DepthFirstOrder).All(ctx)
+	for p, stat := range nodes {
+		slog.Info("visited node", "path", p, "version", stat.Version)
 	}
-
-	// Walk breath-first with parallel traversal and receive events by channel.
-	ch := c.TreeWalker("/foo").
-		BreadthFirstParallel().
-		WalkChan(8) // You can tune the buffer size.
-	for e := range ch {
-		if e.Err != nil {
-			panic(e.Err)
-		}
-		log.Printf("Got %s", e.Path)
+	if err = walkErr(); err != nil {
+		panic(err)
 	}
 }

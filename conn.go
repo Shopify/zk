@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -31,9 +32,6 @@ var ErrNoServer = errors.New("zk: could not connect to a server")
 // an invalid path. (e.g. empty path).
 var ErrInvalidPath = errors.New("zk: invalid path")
 
-// DefaultLogger uses the stdlib log package for logging.
-var DefaultLogger Logger = defaultLogger{}
-
 const (
 	bufferSize      = 1536 * 1024
 	eventChanSize   = 6
@@ -43,11 +41,6 @@ const (
 
 // Dialer is a function to be used to establish a connection to a single host.
 type Dialer func(network, address string, timeout time.Duration) (net.Conn, error)
-
-// Logger is an interface that can be implemented to provide custom log output.
-type Logger interface {
-	Printf(string, ...any)
-}
 
 type authCreds struct {
 	scheme string
@@ -96,7 +89,7 @@ type Conn struct {
 	debugCloseRecvLoop bool
 	resendZkAuthFn     func(context.Context, *Conn) error
 
-	logger  Logger
+	logger  *slog.Logger
 	logInfo bool // true if information messages are logged; false if only errors are logged
 
 	buf []byte
@@ -152,13 +145,6 @@ type HostProvider interface {
 	Connected()
 }
 
-// ConnectWithDialer establishes a new connection to a pool of zookeeper servers
-// using a custom Dialer. See Connect for further information about session timeout.
-// This method is deprecated and provided for compatibility: use the WithDialer option instead.
-func ConnectWithDialer(servers []string, sessionTimeout time.Duration, dialer Dialer) (*Conn, <-chan Event, error) {
-	return Connect(servers, sessionTimeout, WithDialer(dialer))
-}
-
 // Connect establishes a new connection to a pool of zookeeper
 // servers. The provided session timeout sets the amount of time for which
 // a session is considered valid after losing connection to a server. Within
@@ -187,7 +173,7 @@ func Connect(servers []string, sessionTimeout time.Duration, options ...connOpti
 		requests:       make(map[int32]*request),
 		watchersByKey:  make(map[watcherKey][]watcher),
 		passwd:         emptyPassword,
-		logger:         DefaultLogger,
+		logger:         slog.Default(),
 		logInfo:        true, // default is true for backwards compatability
 		buf:            make([]byte, bufferSize),
 		resendZkAuthFn: resendZkAuth,
@@ -238,8 +224,8 @@ func WithHostProvider(hostProvider HostProvider) connOption { // nolint:revive
 	}
 }
 
-// WithLogger returns a connection option specifying a non-default Logger.
-func WithLogger(logger Logger) connOption { // nolint: revive
+// WithLogger returns a connection option specifying a non-default slog Logger.
+func WithLogger(logger *slog.Logger) connOption { // nolint: revive
 	return func(c *Conn) {
 		c.logger = logger
 	}
@@ -321,8 +307,7 @@ func (c *Conn) SessionID() int64 {
 }
 
 // SetLogger sets the logger to be used for printing errors.
-// Logger is an interface provided by this package.
-func (c *Conn) SetLogger(l Logger) {
+func (c *Conn) SetLogger(l *slog.Logger) {
 	c.logger = l
 }
 
@@ -376,12 +361,12 @@ func (c *Conn) connect() error {
 			c.conn = zkConn
 			c.setState(StateConnected)
 			if c.logInfo {
-				c.logger.Printf("connected to %s", c.Server())
+				c.logger.Info("connected", "server", c.Server())
 			}
 			return nil
 		}
 
-		c.logger.Printf("failed to connect to %s: %v", c.Server(), err)
+		c.logger.Error("failed to connect", "server", c.Server(), "error", err)
 	}
 }
 
@@ -425,17 +410,17 @@ func (c *Conn) loop(ctx context.Context) {
 		err := c.authenticate()
 		switch {
 		case errors.Is(err, ErrSessionExpired):
-			c.logger.Printf("authentication expired: %s", err)
+			c.logger.Error("authentication expired", "error", err)
 			c.resetSession(err)
 		case err != nil && c.conn != nil:
-			c.logger.Printf("authentication failed: %s", err)
+			c.logger.Error("authentication failed", "error", err)
 			c.conn.Close()
 			if !disconnectTime.IsZero() && c.sessionExpired(disconnectTime) {
 				c.resetSession(ErrSessionExpired)
 			}
 		case err == nil:
 			if c.logInfo {
-				c.logger.Printf("authenticated: id=%d, timeout=%d", c.SessionID(), c.sessionTimeoutMs)
+				c.logger.Info("authenticated", "id", c.SessionID(), "timeout", c.sessionTimeoutMs)
 			}
 			c.hostProvider.Connected()        // mark success
 			c.closeChan = make(chan struct{}) // channel to tell send loop stop
@@ -446,12 +431,12 @@ func (c *Conn) loop(ctx context.Context) {
 				defer c.conn.Close() // causes recv loop to EOF/exit
 
 				if err := c.resendZkAuthFn(ctx, c); err != nil {
-					c.logger.Printf("error in resending auth creds: %v", err)
+					c.logger.Error("error in resending auth creds", "error", err)
 					return
 				}
 
 				if err := c.sendLoop(); err != nil || c.logInfo {
-					c.logger.Printf("send loop terminated: %v", err)
+					c.logger.Info("send loop terminated", "error", err)
 				}
 			})
 
@@ -465,7 +450,7 @@ func (c *Conn) loop(ctx context.Context) {
 					err = c.recvLoop(c.conn)
 				}
 				if !errors.Is(err, io.EOF) || c.logInfo {
-					c.logger.Printf("recv loop terminated: %v", err)
+					c.logger.Info("recv loop terminated", "error", err)
 				}
 				if err == nil {
 					panic("zk: recvLoop should never return nil error")
@@ -572,7 +557,7 @@ func (c *Conn) notifyWatchers(ev Event) {
 		// This must be done in the background to avoid deadlocking the recv loop.
 		go func() {
 			for _, w := range deadWatchers {
-				_ = c.RemoveWatch(w.eventChan()) // Ignore errors.
+				_ = c.RemoveWatch(context.Background(), w.eventChan()) // Ignore errors.
 			}
 		}()
 	}
@@ -702,7 +687,7 @@ func (c *Conn) restoreWatches() {
 		for _, req = range reqs {
 			_, _, err := c.request(context.Background(), opSetWatches2, req, nil, nil)
 			if err != nil {
-				c.logger.Printf("failed to set previous watches: %v", err)
+				c.logger.Error("failed to set previous watches", "error", err)
 				break
 			}
 		}
@@ -846,7 +831,7 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 	for {
 		// package length
 		if _, err := readFullWithDeadline(conn, buf[:4], c.ioTimeout); err != nil {
-			return fmt.Errorf("failed to read from connection: %v", err)
+			return fmt.Errorf("failed to read from connection: %w", err)
 		}
 
 		blen := int(binary.BigEndian.Uint32(buf[:4]))
@@ -882,7 +867,7 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 		} else if res.Xid == -2 {
 			// Ping response. Ignore.
 		} else if res.Xid < 0 {
-			c.logger.Printf("xid < 0 (%d) but not ping or watcher event", res.Xid)
+			c.logger.Error("xid < 0 but not ping or watcher event", "xid", res.Xid)
 		} else {
 			if res.Zxid > 0 {
 				c.lastZxid = res.Zxid
@@ -896,7 +881,7 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 			c.requestsLock.Unlock()
 
 			if !ok {
-				c.logger.Printf("response for unknown request with xid %d", res.Xid)
+				c.logger.Error("response for unknown request", "xid", res.Xid)
 			} else {
 				var err error
 				if res.Err != 0 {
@@ -928,7 +913,7 @@ func (c *Conn) addWatcher(path string, kind watcherKind, opts watcherOptions) <-
 	opts.stallCallback = func() {
 		// Report watcher stalls.
 		c.sendEvent(Event{Type: EventWatcherStalled, Path: path, State: c.State()})
-		c.logger.Printf("persistent watcher has stalled! {kind:%s, path:%s}", kind, path)
+		c.logger.Error("persistent watcher has stalled", "kind", kind, "path", path)
 
 		if stallCallback != nil { // Call the supplied callback
 			stallCallback()
@@ -1001,7 +986,7 @@ func (c *Conn) queueRequest(ctx context.Context, opcode int32, req any, res any,
 		select {
 		case c.sendChan <- rq:
 		case <-time.After(c.connectTimeout * 2):
-			c.logger.Printf("gave up trying to send opClose to server")
+			c.logger.Error("gave up trying to send opClose to server")
 			rq.recvChan <- response{-1, ErrConnectionClosed}
 		case <-ctx.Done():
 			rq.recvChan <- response{-1, ctx.Err()}
@@ -1049,12 +1034,7 @@ func (c *Conn) request(
 }
 
 // AddAuth adds an authentication config to the connection.
-func (c *Conn) AddAuth(scheme string, auth []byte) error {
-	return c.AddAuthCtx(context.Background(), scheme, auth)
-}
-
-// AddAuthCtx adds an authentication config to the connection.
-func (c *Conn) AddAuthCtx(ctx context.Context, scheme string, auth []byte) error {
+func (c *Conn) AddAuth(ctx context.Context, scheme string, auth []byte) error {
 	_, _, err := c.request(ctx, opSetAuth, &setAuthRequest{Type: 0, Scheme: scheme, Auth: auth}, nil, nil)
 	if err != nil {
 		return err
@@ -1080,12 +1060,7 @@ func (c *Conn) AddAuthCtx(ctx context.Context, scheme string, auth []byte) error
 }
 
 // AddWatch creates a persistent (optionally recursive) watch at the given path.
-func (c *Conn) AddWatch(path string, recursive bool, options ...WatcherOption) (<-chan Event, error) {
-	return c.AddWatchCtx(context.Background(), path, recursive, options...)
-}
-
-// AddWatchCtx creates a persistent (optionally recursive) watch at the given path.
-func (c *Conn) AddWatchCtx(ctx context.Context, path string, recursive bool, options ...WatcherOption) (<-chan Event, error) {
+func (c *Conn) AddWatch(ctx context.Context, path string, recursive bool, options ...WatcherOption) (<-chan Event, error) {
 	if err := validatePath(path, false); err != nil {
 		return nil, err
 	}
@@ -1117,13 +1092,7 @@ func (c *Conn) AddWatchCtx(ctx context.Context, path string, recursive bool, opt
 
 // RemoveWatch removes a watch associated with the given channel.
 // Note: This method works for any type of watch, not just persistent ones.
-func (c *Conn) RemoveWatch(ech <-chan Event) error {
-	return c.RemoveWatchCtx(context.Background(), ech)
-}
-
-// RemoveWatchCtx removes a watch associated with the given channel.
-// Note: This method works for any type of watch, not just persistent ones.
-func (c *Conn) RemoveWatchCtx(ctx context.Context, ech <-chan Event) error {
+func (c *Conn) RemoveWatch(ctx context.Context, ech <-chan Event) error {
 	c.watchersLock.Lock()
 
 	// Remove the watcher from the client, first.
@@ -1158,12 +1127,7 @@ func (c *Conn) RemoveWatchCtx(ctx context.Context, ech <-chan Event) error {
 }
 
 // Children returns the children of a znode.
-func (c *Conn) Children(path string) ([]string, *Stat, error) {
-	return c.ChildrenCtx(context.Background(), path)
-}
-
-// ChildrenCtx returns the children of a znode.
-func (c *Conn) ChildrenCtx(ctx context.Context, path string) ([]string, *Stat, error) {
+func (c *Conn) Children(ctx context.Context, path string) ([]string, *Stat, error) {
 	if err := validatePath(path, false); err != nil {
 		return nil, nil, err
 	}
@@ -1178,12 +1142,7 @@ func (c *Conn) ChildrenCtx(ctx context.Context, path string) ([]string, *Stat, e
 }
 
 // ChildrenW returns the children of a znode and sets a watch.
-func (c *Conn) ChildrenW(path string) ([]string, *Stat, <-chan Event, error) {
-	return c.ChildrenWCtx(context.Background(), path)
-}
-
-// ChildrenWCtx returns the children of a znode and sets a watch.
-func (c *Conn) ChildrenWCtx(ctx context.Context, path string) ([]string, *Stat, <-chan Event, error) {
+func (c *Conn) ChildrenW(ctx context.Context, path string) ([]string, *Stat, <-chan Event, error) {
 	if err := validatePath(path, false); err != nil {
 		return nil, nil, nil, err
 	}
@@ -1203,12 +1162,7 @@ func (c *Conn) ChildrenWCtx(ctx context.Context, path string) ([]string, *Stat, 
 }
 
 // Get gets the contents of a znode.
-func (c *Conn) Get(path string) ([]byte, *Stat, error) {
-	return c.GetCtx(context.Background(), path)
-}
-
-// GetCtx gets the contents of a znode.
-func (c *Conn) GetCtx(ctx context.Context, path string) ([]byte, *Stat, error) {
+func (c *Conn) Get(ctx context.Context, path string) ([]byte, *Stat, error) {
 	if err := validatePath(path, false); err != nil {
 		return nil, nil, err
 	}
@@ -1223,12 +1177,7 @@ func (c *Conn) GetCtx(ctx context.Context, path string) ([]byte, *Stat, error) {
 }
 
 // GetW returns the contents of a znode and sets a watch
-func (c *Conn) GetW(path string) ([]byte, *Stat, <-chan Event, error) {
-	return c.GetWCtx(context.Background(), path)
-}
-
-// GetWCtx returns the contents of a znode and sets a watch
-func (c *Conn) GetWCtx(ctx context.Context, path string) ([]byte, *Stat, <-chan Event, error) {
+func (c *Conn) GetW(ctx context.Context, path string) ([]byte, *Stat, <-chan Event, error) {
 	if err := validatePath(path, false); err != nil {
 		return nil, nil, nil, err
 	}
@@ -1248,12 +1197,7 @@ func (c *Conn) GetWCtx(ctx context.Context, path string) ([]byte, *Stat, <-chan 
 }
 
 // Set updates the contents of a znode.
-func (c *Conn) Set(path string, data []byte, version int32) (*Stat, error) {
-	return c.SetCtx(context.Background(), path, data, version)
-}
-
-// SetCtx updates the contents of a znode.
-func (c *Conn) SetCtx(ctx context.Context, path string, data []byte, version int32) (*Stat, error) {
+func (c *Conn) Set(ctx context.Context, path string, data []byte, version int32) (*Stat, error) {
 	if err := validatePath(path, false); err != nil {
 		return nil, err
 	}
@@ -1271,15 +1215,7 @@ func (c *Conn) SetCtx(ctx context.Context, path string, data []byte, version int
 // The returned path is the new path assigned by the server, it may not be the
 // same as the input, for example when creating a sequence znode the returned path
 // will be the input path with a sequence number appended.
-func (c *Conn) Create(path string, data []byte, flags int32, acl []ACL) (string, error) {
-	return c.CreateCtx(context.Background(), path, data, flags, acl)
-}
-
-// CreateCtx creates a znode.
-// The returned path is the new path assigned by the server, it may not be the
-// same as the input, for example when creating a sequence znode the returned path
-// will be the input path with a sequence number appended.
-func (c *Conn) CreateCtx(ctx context.Context, path string, data []byte, flags int32, acl []ACL) (string, error) {
+func (c *Conn) Create(ctx context.Context, path string, data []byte, flags int32, acl []ACL) (string, error) {
 	if err := validatePath(path, flags&FlagSequence == FlagSequence); err != nil {
 		return "", err
 	}
@@ -1294,12 +1230,7 @@ func (c *Conn) CreateCtx(ctx context.Context, path string, data []byte, flags in
 }
 
 // CreateContainer creates a container znode and returns the path.
-func (c *Conn) CreateContainer(path string, data []byte, flags int32, acl []ACL) (string, error) {
-	return c.CreateContainerCtx(context.Background(), path, data, flags, acl)
-}
-
-// CreateContainerCtx creates a container znode and returns the path.
-func (c *Conn) CreateContainerCtx(ctx context.Context, path string, data []byte, flags int32, acl []ACL) (string, error) {
+func (c *Conn) CreateContainer(ctx context.Context, path string, data []byte, flags int32, acl []ACL) (string, error) {
 	if err := validatePath(path, flags&FlagSequence == FlagSequence); err != nil {
 		return "", err
 	}
@@ -1317,12 +1248,7 @@ func (c *Conn) CreateContainerCtx(ctx context.Context, path string, data []byte,
 }
 
 // CreateTTL creates a TTL znode, which will be automatically deleted by server after the TTL.
-func (c *Conn) CreateTTL(path string, data []byte, flags int32, acl []ACL, ttl time.Duration) (string, error) {
-	return c.CreateTTLCtx(context.Background(), path, data, flags, acl, ttl)
-}
-
-// CreateTTLCtx creates a TTL znode, which will be automatically deleted by server after the TTL.
-func (c *Conn) CreateTTLCtx(ctx context.Context, path string, data []byte, flags int32, acl []ACL, ttl time.Duration) (string, error) {
+func (c *Conn) CreateTTL(ctx context.Context, path string, data []byte, flags int32, acl []ACL, ttl time.Duration) (string, error) {
 	if err := validatePath(path, flags&FlagSequence == FlagSequence); err != nil {
 		return "", err
 	}
@@ -1343,15 +1269,7 @@ func (c *Conn) CreateTTLCtx(ctx context.Context, path string, data []byte, flags
 // after it creates the node. On reconnect the session may still be valid so the
 // ephemeral node still exists. Therefore, on reconnect we need to check if a node
 // with a GUID generated on create exists.
-func (c *Conn) CreateProtectedEphemeralSequential(path string, data []byte, acl []ACL) (string, error) {
-	return c.CreateProtectedEphemeralSequentialCtx(context.Background(), path, data, acl)
-}
-
-// CreateProtectedEphemeralSequentialCtx fixes a race condition if the server crashes
-// after it creates the node. On reconnect the session may still be valid so the
-// ephemeral node still exists. Therefore, on reconnect we need to check if a node
-// with a GUID generated on create exists.
-func (c *Conn) CreateProtectedEphemeralSequentialCtx(ctx context.Context, path string, data []byte, acl []ACL) (string, error) {
+func (c *Conn) CreateProtectedEphemeralSequential(ctx context.Context, path string, data []byte, acl []ACL) (string, error) {
 	if err := validatePath(path, true); err != nil {
 		return "", err
 	}
@@ -1370,11 +1288,11 @@ func (c *Conn) CreateProtectedEphemeralSequentialCtx(ctx context.Context, path s
 
 	var newPath string
 	for range 3 {
-		newPath, err = c.CreateCtx(ctx, protectedPath, data, FlagEphemeral|FlagSequence, acl)
+		newPath, err = c.Create(ctx, protectedPath, data, FlagEphemeral|FlagSequence, acl)
 		if errors.Is(err, ErrSessionExpired) {
 			// No need to search for the node since it can't exist. Just try again.
 		} else if errors.Is(err, ErrConnectionClosed) {
-			children, _, err := c.ChildrenCtx(ctx, rootPath)
+			children, _, err := c.Children(ctx, rootPath)
 			if err != nil {
 				// Return the path with GUID for error handling
 				//
@@ -1402,12 +1320,7 @@ func (c *Conn) CreateProtectedEphemeralSequentialCtx(ctx context.Context, path s
 }
 
 // Delete deletes a znode.
-func (c *Conn) Delete(path string, version int32) error {
-	return c.DeleteCtx(context.Background(), path, version)
-}
-
-// DeleteCtx deletes a znode.
-func (c *Conn) DeleteCtx(ctx context.Context, path string, version int32) error {
+func (c *Conn) Delete(ctx context.Context, path string, version int32) error {
 	if err := validatePath(path, false); err != nil {
 		return err
 	}
@@ -1417,12 +1330,7 @@ func (c *Conn) DeleteCtx(ctx context.Context, path string, version int32) error 
 }
 
 // Exists tells the existence of a znode.
-func (c *Conn) Exists(path string) (bool, *Stat, error) {
-	return c.ExistsCtx(context.Background(), path)
-}
-
-// ExistsCtx tells the existence of a znode.
-func (c *Conn) ExistsCtx(ctx context.Context, path string) (bool, *Stat, error) {
+func (c *Conn) Exists(ctx context.Context, path string) (bool, *Stat, error) {
 	if err := validatePath(path, false); err != nil {
 		return false, nil, err
 	}
@@ -1443,12 +1351,7 @@ func (c *Conn) ExistsCtx(ctx context.Context, path string) (bool, *Stat, error) 
 }
 
 // ExistsW tells the existence of a znode and sets a watch.
-func (c *Conn) ExistsW(path string) (bool, *Stat, <-chan Event, error) {
-	return c.ExistsWCtx(context.Background(), path)
-}
-
-// ExistsWCtx tells the existence of a znode and sets a watch.
-func (c *Conn) ExistsWCtx(ctx context.Context, path string) (bool, *Stat, <-chan Event, error) {
+func (c *Conn) ExistsW(ctx context.Context, path string) (bool, *Stat, <-chan Event, error) {
 	if err := validatePath(path, false); err != nil {
 		return false, nil, nil, err
 	}
@@ -1476,12 +1379,7 @@ func (c *Conn) ExistsWCtx(ctx context.Context, path string) (bool, *Stat, <-chan
 }
 
 // GetACL gets the ACLs of a znode.
-func (c *Conn) GetACL(path string) ([]ACL, *Stat, error) {
-	return c.GetACLCtx(context.Background(), path)
-}
-
-// GetACLCtx gets the ACLs of a znode.
-func (c *Conn) GetACLCtx(ctx context.Context, path string) ([]ACL, *Stat, error) {
+func (c *Conn) GetACL(ctx context.Context, path string) ([]ACL, *Stat, error) {
 	if err := validatePath(path, false); err != nil {
 		return nil, nil, err
 	}
@@ -1496,12 +1394,7 @@ func (c *Conn) GetACLCtx(ctx context.Context, path string) ([]ACL, *Stat, error)
 }
 
 // SetACL updates the ACLs of a znode.
-func (c *Conn) SetACL(path string, acl []ACL, version int32) (*Stat, error) {
-	return c.SetACLCtx(context.Background(), path, acl, version)
-}
-
-// SetACLCtx updates the ACLs of a znode.
-func (c *Conn) SetACLCtx(ctx context.Context, path string, acl []ACL, version int32) (*Stat, error) {
+func (c *Conn) SetACL(ctx context.Context, path string, acl []ACL, version int32) (*Stat, error) {
 	if err := validatePath(path, false); err != nil {
 		return nil, err
 	}
@@ -1518,14 +1411,7 @@ func (c *Conn) SetACLCtx(ctx context.Context, path string, acl []ACL, version in
 // Sync flushes the channel between process and the leader of a given znode,
 // you may need it if you want identical views of ZooKeeper data for 2 client instances.
 // Please refer to the "Consistency Guarantees" section of ZK document for more details.
-func (c *Conn) Sync(path string) (string, error) {
-	return c.SyncCtx(context.Background(), path)
-}
-
-// SyncCtx flushes the channel between process and the leader of a given znode,
-// you may need it if you want identical views of ZooKeeper data for 2 client instances.
-// Please refer to the "Consistency Guarantees" section of ZK document for more details.
-func (c *Conn) SyncCtx(ctx context.Context, path string) (string, error) {
+func (c *Conn) Sync(ctx context.Context, path string) (string, error) {
 	if err := validatePath(path, false); err != nil {
 		return "", err
 	}
@@ -1551,14 +1437,7 @@ type MultiResponse struct {
 // Multi executes multiple ZooKeeper operations or none of them. The provided
 // ops must be one of *CreateRequest, *DeleteRequest, *SetDataRequest, or
 // *CheckVersionRequest.
-func (c *Conn) Multi(ops ...any) ([]MultiResponse, error) {
-	return c.MultiCtx(context.Background(), ops...)
-}
-
-// MultiCtx executes multiple ZooKeeper operations or none of them. The provided
-// ops must be one of *CreateRequest, *DeleteRequest, *SetDataRequest, or
-// *CheckVersionRequest.
-func (c *Conn) MultiCtx(ctx context.Context, ops ...any) ([]MultiResponse, error) {
+func (c *Conn) Multi(ctx context.Context, ops ...any) ([]MultiResponse, error) {
 	req := &multiRequest{
 		Ops:        make([]multiRequestOp, 0, len(ops)),
 		DoneHeader: multiHeader{Type: -1, Done: true, Err: -1},
@@ -1610,14 +1489,7 @@ func (c *Conn) MultiCtx(ctx context.Context, ops ...any) ([]MultiResponse, error
 
 // MultiRead executes multiple ZooKeeper read operations.
 // The provided ops must be one of *GetDataRequest or *GetChildrenRequest.
-// A MultiResponse will be returned for each op, with data or children.
-func (c *Conn) MultiRead(ops ...any) ([]MultiResponse, error) {
-	return c.MultiReadCtx(context.Background(), ops...)
-}
-
-// MultiReadCtx executes multiple ZooKeeper read operations.
-// The provided ops must be one of *GetDataRequest or *GetChildrenRequest.
-func (c *Conn) MultiReadCtx(ctx context.Context, ops ...any) ([]MultiResponse, error) {
+func (c *Conn) MultiRead(ctx context.Context, ops ...any) ([]MultiResponse, error) {
 	req := &multiRequest{
 		Ops:        make([]multiRequestOp, 0, len(ops)),
 		DoneHeader: multiHeader{Type: -1, Done: true, Err: -1},
@@ -1669,17 +1541,7 @@ func (c *Conn) MultiReadCtx(ctx context.Context, ops ...any) ([]MultiResponse, e
 // An optional version allows for conditional reconfigurations, -1 ignores the condition.
 //
 // Returns the new configuration znode stat.
-func (c *Conn) IncrementalReconfig(joining, leaving []string, version int64) (*Stat, error) {
-	return c.IncrementalReconfigCtx(context.Background(), joining, leaving, version)
-}
-
-// IncrementalReconfigCtx is the zookeeper reconfiguration api that allows adding and removing servers
-// by lists of members. For more info refer to the ZK documentation.
-//
-// An optional version allows for conditional reconfigurations, -1 ignores the condition.
-//
-// Returns the new configuration znode stat.
-func (c *Conn) IncrementalReconfigCtx(ctx context.Context, joining, leaving []string, version int64) (*Stat, error) {
+func (c *Conn) IncrementalReconfig(ctx context.Context, joining, leaving []string, version int64) (*Stat, error) {
 	// TODO: validate the shape of the member string to give early feedback.
 	request := &reconfigRequest{
 		JoiningServers: []byte(strings.Join(joining, ",")),
@@ -1696,17 +1558,7 @@ func (c *Conn) IncrementalReconfigCtx(ctx context.Context, joining, leaving []st
 // An optional version allows for conditional reconfigurations, -1 ignores the condition.
 //
 // Returns the new configuration znode stat.
-func (c *Conn) Reconfig(members []string, version int64) (*Stat, error) {
-	return c.ReconfigCtx(context.Background(), members, version)
-}
-
-// ReconfigCtx is the non-incremental update functionality for Zookeeper where the list provided
-// is the entire new member list. For more info refer to the ZK documentation.
-//
-// An optional version allows for conditional reconfigurations, -1 ignores the condition.
-//
-// Returns the new configuration znode stat.
-func (c *Conn) ReconfigCtx(ctx context.Context, members []string, version int64) (*Stat, error) {
+func (c *Conn) Reconfig(ctx context.Context, members []string, version int64) (*Stat, error) {
 	req := &reconfigRequest{
 		NewMembers:  []byte(strings.Join(members, ",")),
 		CurConfigId: version,
@@ -1736,7 +1588,7 @@ func (c *Conn) Server() string {
 // Nodes are traversed in the specified order (depth-first or breadth-first).
 // For large trees, use BatchWalker instead.
 func (c *Conn) Walker(path string, order TraversalOrder) *TreeWalker {
-	return NewTreeWalker(c.ChildrenCtx, path, order)
+	return NewTreeWalker(c.Children, path, order)
 }
 
 // BatchWalker returns a new BatchTreeWalker used to traverse the tree of nodes at the given path.
@@ -1762,7 +1614,7 @@ func resendZkAuth(ctx context.Context, c *Conn) error {
 	defer c.credsMu.Unlock()
 
 	if c.logInfo {
-		c.logger.Printf("re-submitting `%d` credentials after reconnect", len(c.creds))
+		c.logger.Info("re-submitting credentials after reconnect", "count", len(c.creds))
 	}
 
 	for _, cred := range c.creds {
@@ -1782,23 +1634,23 @@ func resendZkAuth(ctx context.Context, c *Conn) error {
 			nil, /* recvFunc*/
 		)
 		if err != nil {
-			return fmt.Errorf("failed to send auth request: %v", err)
+			return fmt.Errorf("failed to send auth request: %w", err)
 		}
 
 		var res response
 		select {
 		case res = <-resChan:
 		case <-c.closeChan:
-			c.logger.Printf("recv closed, cancel re-submitting credentials")
+			c.logger.Info("recv closed, cancel re-submitting credentials")
 			return nil
 		case <-c.shouldQuit:
-			c.logger.Printf("should quit, cancel re-submitting credentials")
+			c.logger.Info("should quit, cancel re-submitting credentials")
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 		if res.err != nil {
-			return fmt.Errorf("failed connection setAuth request: %v", res.err)
+			return fmt.Errorf("failed connection setAuth request: %w", res.err)
 		}
 	}
 

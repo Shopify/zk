@@ -1,9 +1,10 @@
 package zk
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"testing"
 	"time"
@@ -30,15 +31,15 @@ func TestDNSHostProviderCreate(t *testing.T) {
 
 		path := "/gozk-test"
 
-		if err := c.Delete(path, -1); err != nil && !errors.Is(err, ErrNoNode) {
+		if err := c.Delete(context.Background(), path, -1); err != nil && !errors.Is(err, ErrNoNode) {
 			t.Fatalf("Delete returned error: %+v", err)
 		}
-		if p, err := c.Create(path, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+		if p, err := c.Create(context.Background(), path, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
 			t.Fatalf("Create returned error: %+v", err)
 		} else if p != path {
 			t.Fatalf("Create returned different path '%s' != '%s'", p, path)
 		}
-		if data, stat, err := c.Get(path); err != nil {
+		if data, stat, err := c.Get(context.Background(), path); err != nil {
 			t.Fatalf("Get returned error: %+v", err)
 		} else if stat == nil {
 			t.Fatal("Get returned nil stat")
@@ -78,7 +79,8 @@ func (lhpf *localHostPortsFacade) Next() (string, bool) {
 	}
 
 	if lhpf.nextPort == len(lhpf.ports) {
-		log.Fatalf("localHostPortsFacade out of ports to assign to %q; current config: %q", server, lhpf.mapped)
+		slog.Error("localHostPortsFacade out of ports", "server", server, "mapped", lhpf.mapped)
+		panic("localHostPortsFacade out of ports")
 	}
 
 	localMapping := net.JoinHostPort("localhost", fmt.Sprint(lhpf.ports[lhpf.nextPort]))
@@ -114,7 +116,7 @@ func TestDNSHostProviderReconnect(t *testing.T) {
 		path := "/gozk-test"
 
 		// Initial operation to force connection.
-		if err := c.Delete(path, -1); err != nil && !errors.Is(err, ErrNoNode) {
+		if err := c.Delete(context.Background(), path, -1); err != nil && !errors.Is(err, ErrNoNode) {
 			t.Fatalf("Delete returned error: %+v", err)
 		}
 
@@ -140,12 +142,12 @@ func TestDNSHostProviderReconnect(t *testing.T) {
 		_ = tc.Servers[serverIndex].Srv.Start()
 
 		// Continue with the basic TestCreate tests.
-		if p, err := c.Create(path, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
+		if p, err := c.Create(context.Background(), path, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
 			t.Fatalf("Create returned error: %+v", err)
 		} else if p != path {
 			t.Fatalf("Create returned different path '%s' != '%s'", p, path)
 		}
-		if data, stat, err := c.Get(path); err != nil {
+		if data, stat, err := c.Get(context.Background(), path); err != nil {
 			t.Fatalf("Get returned error: %+v", err)
 		} else if stat == nil {
 			t.Fatal("Get returned nil stat")

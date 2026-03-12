@@ -1,7 +1,9 @@
 package zk
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -32,15 +34,15 @@ func TestBasicCluster(t *testing.T) {
 
 		time.Sleep(time.Second * 5)
 
-		if _, err := c1.Create("/gozk-test", []byte("foo-cluster"), 0, WorldACL(PermAll)); err != nil {
+		if _, err := c1.Create(context.Background(), "/gozk-test", []byte("foo-cluster"), 0, WorldACL(PermAll)); err != nil {
 			t.Fatalf("Create failed on node 1: %+v", err)
 		}
 
-		if _, err := c2.Sync("/gozk-test"); err != nil {
+		if _, err := c2.Sync(context.Background(), "/gozk-test"); err != nil {
 			t.Fatalf("Sync failed on node 2: %+v", err)
 		}
 
-		if by, _, err := c2.Get("/gozk-test"); err != nil {
+		if by, _, err := c2.Get(context.Background(), "/gozk-test"); err != nil {
 			t.Fatalf("Get failed on node 2: %+v", err)
 		} else if string(by) != "foo-cluster" {
 			t.Fatal("Wrong data for node 2")
@@ -64,7 +66,7 @@ func TestClientClusterFailover(t *testing.T) {
 			t.Fatalf("Failed to connect and get session")
 		}
 
-		if _, err := c.Create("/gozk-test", []byte("foo-cluster"), 0, WorldACL(PermAll)); err != nil {
+		if _, err := c.Create(context.Background(), "/gozk-test", []byte("foo-cluster"), 0, WorldACL(PermAll)); err != nil {
 			t.Fatalf("Create failed on node 1: %+v", err)
 		}
 
@@ -78,7 +80,7 @@ func TestClientClusterFailover(t *testing.T) {
 			t.Fatalf("Failover failed")
 		}
 
-		if by, _, err := c.Get("/gozk-test"); err != nil {
+		if by, _, err := c.Get(context.Background(), "/gozk-test"); err != nil {
 			t.Fatalf("Get failed on node 2: %+v", err)
 		} else if string(by) != "foo-cluster" {
 			t.Fatal("Wrong data for node 2")
@@ -103,10 +105,10 @@ func TestNoQuorum(t *testing.T) {
 			t.Fatalf("Failed to connect and get session")
 		}
 		initialSessionID := c.sessionID.Load()
-		DefaultLogger.Printf("    Session established: id=%d, timeout=%d", c.sessionID.Load(), c.sessionTimeoutMs)
+		slog.Info("session established", "id", c.sessionID.Load(), "timeout", c.sessionTimeoutMs)
 
 		// Kill the ZooKeeper leader and wait for the session to reconnect.
-		DefaultLogger.Printf("    Kill the leader")
+		slog.Info("    Kill the leader")
 		disconnectWatcher1 := sl.NewWatcher(sessionStateMatcher(StateDisconnected))
 		hasSessionWatcher2 := sl.NewWatcher(sessionStateMatcher(StateHasSession))
 		tc.StopServer(hasSessionEvent1.Server)
@@ -126,7 +128,7 @@ func TestNoQuorum(t *testing.T) {
 		}
 
 		// Kill the ZooKeeper leader leaving the cluster without quorum.
-		DefaultLogger.Printf("    Kill the leader")
+		slog.Info("    Kill the leader")
 		disconnectWatcher2 := sl.NewWatcher(sessionStateMatcher(StateDisconnected))
 		tc.StopServer(hasSessionEvent2.Server)
 
@@ -142,7 +144,7 @@ func TestNoQuorum(t *testing.T) {
 		// Make sure that we keep retrying connecting to the only remaining
 		// ZooKeeper server, but the attempts are being dropped because there is
 		// no quorum.
-		DefaultLogger.Printf("    Retrying no luck...")
+		slog.Info("    Retrying no luck...")
 		var firstDisconnect *Event
 		begin := time.Now()
 		for time.Since(begin) < 6*time.Second {
@@ -222,14 +224,14 @@ func TestBadSession(t *testing.T) {
 		}
 		defer c.Close()
 
-		if err := c.Delete("/gozk-test", -1); err != nil && !errors.Is(err, ErrNoNode) {
+		if err := c.Delete(context.Background(), "/gozk-test", -1); err != nil && !errors.Is(err, ErrNoNode) {
 			t.Fatalf("Delete returned error: %+v", err)
 		}
 
 		c.conn.Close()
 		time.Sleep(time.Millisecond * 100)
 
-		if err := c.Delete("/gozk-test", -1); err != nil && !errors.Is(err, ErrNoNode) {
+		if err := c.Delete(context.Background(), "/gozk-test", -1); err != nil && !errors.Is(err, ErrNoNode) {
 			t.Fatalf("Delete returned error: %+v", err)
 		}
 	})
@@ -253,7 +255,7 @@ func NewStateLogger(eventCh <-chan Event) *EventLogger {
 					sw.matchCh <- event
 				}
 			}
-			DefaultLogger.Printf("    event received: %v\n", event)
+			slog.Info("event received", "event", event)
 			el.events = append(el.events, event)
 			el.lock.Unlock()
 		}
