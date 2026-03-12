@@ -3,14 +3,12 @@ package zk
 import (
 	"context"
 	"errors"
+	"iter"
 	gopath "path"
 )
 
 // BatchVisitorFunc is a function that is called for each batch of nodes visited.
-type BatchVisitorFunc func(paths []string) error
-
-// BatchVisitorCtxFunc is like BatchVisitorFunc, but it takes a context.
-type BatchVisitorCtxFunc func(ctx context.Context, paths []string) error
+type BatchVisitorFunc func(ctx context.Context, paths []string) error
 
 // NewBatchTreeWalker returns a new BatchTreeWalker for the given connection, root path and batch size.
 func NewBatchTreeWalker(conn *Conn, path string, batchSize int) *BatchTreeWalker {
@@ -33,52 +31,37 @@ type BatchTreeWalker struct {
 	batchSize int
 }
 
-// Walk begins traversing the tree and calls the visitor function for each node visited.
-func (w *BatchTreeWalker) Walk(visitor BatchVisitorFunc) error {
-	vc := func(ctx context.Context, paths []string) error {
-		return visitor(paths)
-	}
-	return w.WalkCtx(context.Background(), vc)
-}
-
-func (w *BatchTreeWalker) WalkCtx(ctx context.Context, visitor BatchVisitorCtxFunc) error {
-	return w.walkBatch(ctx, []string{w.path}, visitor)
-}
-
-// WalkChan begins traversing the tree and sends the results to the returned channel.
-// The channel will be buffered with the given size.
-// The channel is closed when the traversal is complete.
-// If an error occurs, an error event will be sent to the channel before it is closed.
-func (w *BatchTreeWalker) WalkChan(bufferSize int) <-chan VisitEvent {
-	return w.WalkChanCtx(context.Background(), bufferSize)
-}
-
-// WalkChanCtx is like WalkChan, but it takes a context that can be used to cancel the walk.
-func (w *BatchTreeWalker) WalkChanCtx(ctx context.Context, bufferSize int) <-chan VisitEvent {
-	ch := make(chan VisitEvent, bufferSize)
-	visitor := func(ctx context.Context, paths []string) error {
-		for _, p := range paths {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case ch <- VisitEvent{Path: p}:
+// All returns an iterator over all node paths in the tree and an error function.
+// The caller can stop iteration early by breaking out of the range loop.
+// After iteration, call the returned error function to check if the walk
+// was interrupted by an error (as opposed to completing or being broken out of).
+func (w *BatchTreeWalker) All(ctx context.Context) (iter.Seq[string], func() error) {
+	var walkErr error
+	seq := func(yield func(string) bool) {
+		walkErr = w.Walk(ctx, func(_ context.Context, paths []string) error {
+			for _, p := range paths {
+				if !yield(p) {
+					return errBreak
+				}
 			}
+			return nil
+		})
+		if errors.Is(walkErr, errBreak) {
+			walkErr = nil // Break is not an error.
 		}
-		return nil
 	}
-	go func() {
-		defer close(ch)
-		if err := w.WalkCtx(ctx, visitor); err != nil {
-			ch <- VisitEvent{Err: err}
-		}
-	}()
-	return ch
+	return seq, func() error { return walkErr }
+}
+
+// Walk traverses the tree and calls the visitor function for each batch of nodes visited.
+func (w *BatchTreeWalker) Walk(ctx context.Context, visitor BatchVisitorFunc) error {
+	return w.walkBatch(ctx, []string{w.path}, visitor)
 }
 
 // walkBatch recursively walks the tree in batches.
 // It calls the visitor function for each batch of nodes visited.
 // It fetches children in batches to reduce the number of round trips.
-func (w *BatchTreeWalker) walkBatch(ctx context.Context, paths []string, visitor BatchVisitorCtxFunc) error {
+func (w *BatchTreeWalker) walkBatch(ctx context.Context, paths []string, visitor BatchVisitorFunc) error {
 	// Execute the visitor function on all paths.
 	if err := visitor(ctx, paths); err != nil {
 		return err
@@ -123,7 +106,7 @@ func (w *BatchTreeWalker) fetchChildrenBatch(ctx context.Context, paths []string
 		requests[i] = &GetChildrenRequest{Path: p}
 	}
 
-	responses, err := w.conn.MultiReadCtx(ctx, requests...)
+	responses, err := w.conn.MultiRead(ctx, requests...)
 	if err != nil && !errors.Is(err, ErrNoNode) { // Treat ErrNoNode as empty children.
 		return nil, err
 	}

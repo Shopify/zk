@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	gopath "path"
 )
 
@@ -11,18 +12,7 @@ import (
 type ChildrenFunc func(ctx context.Context, path string) ([]string, *Stat, error)
 
 // VisitorFunc is a function that is called for each node visited.
-type VisitorFunc func(path string, stat *Stat) error
-
-// VisitorCtxFunc is like VisitorFunc, but it takes a context.
-type VisitorCtxFunc func(ctx context.Context, path string, stat *Stat) error
-
-// VisitEvent is the event that is sent to the channel returned by various walk functions.
-// If Err is not nil, it indicates that an error occurred while walking the tree.
-type VisitEvent struct {
-	Path string
-	Stat *Stat
-	Err  error
-}
+type VisitorFunc func(ctx context.Context, path string, stat *Stat) error
 
 type TraversalOrder int
 
@@ -49,17 +39,30 @@ type TreeWalker struct {
 	order   TraversalOrder
 }
 
-// Walk begins traversing the tree and calls the visitor function for each node visited.
-func (w *TreeWalker) Walk(visitor VisitorFunc) error {
-	// Adapt VisitorFunc to VisitorCtxFunc.
-	vc := func(ctx context.Context, path string, stat *Stat) error {
-		return visitor(path, stat)
+// All returns an iterator over all nodes in the tree and an error function.
+// The caller can stop iteration early by breaking out of the range loop.
+// After iteration, call the returned error function to check if the walk
+// was interrupted by an error (as opposed to completing or being broken out of).
+func (w *TreeWalker) All(ctx context.Context) (iter.Seq2[string, *Stat], func() error) {
+	var walkErr error
+	seq := func(yield func(string, *Stat) bool) {
+		walkErr = w.Walk(ctx, func(_ context.Context, path string, stat *Stat) error {
+			if !yield(path, stat) {
+				return errBreak
+			}
+			return nil
+		})
+		if errors.Is(walkErr, errBreak) {
+			walkErr = nil // Break is not an error.
+		}
 	}
-	return w.WalkCtx(context.Background(), vc)
+	return seq, func() error { return walkErr }
 }
 
-// WalkCtx is like Walk, but takes a context that can be used to cancel the walk.
-func (w *TreeWalker) WalkCtx(ctx context.Context, visitor VisitorCtxFunc) error {
+var errBreak = errors.New("break")
+
+// Walk traverses the tree and calls the visitor function for each node visited.
+func (w *TreeWalker) Walk(ctx context.Context, visitor VisitorFunc) error {
 	switch w.order {
 	case BreadthFirstOrder:
 		return w.walkBreadthFirst(ctx, w.path, visitor)
@@ -70,32 +73,8 @@ func (w *TreeWalker) WalkCtx(ctx context.Context, visitor VisitorCtxFunc) error 
 	}
 }
 
-// WalkChan begins traversing the tree and sends the results to the returned channel.
-// The channel will be buffered with the given size.
-// The channel is closed when the traversal is complete.
-// If an error occurs, an error event will be sent to the channel before it is closed.
-func (w *TreeWalker) WalkChan(bufferSize int) <-chan VisitEvent {
-	return w.WalkChanCtx(context.Background(), bufferSize)
-}
-
-// WalkChanCtx is like WalkChan, but it takes a context that can be used to cancel the walk.
-func (w *TreeWalker) WalkChanCtx(ctx context.Context, bufferSize int) <-chan VisitEvent {
-	ch := make(chan VisitEvent, bufferSize)
-	visitor := func(ctx context.Context, path string, stat *Stat) error {
-		ch <- VisitEvent{Path: path, Stat: stat}
-		return nil
-	}
-	go func() {
-		defer close(ch)
-		if err := w.WalkCtx(ctx, visitor); err != nil {
-			ch <- VisitEvent{Err: err}
-		}
-	}()
-	return ch
-}
-
 // walkBreadthFirst walks the tree rooted at path in breadth-first order.
-func (w *TreeWalker) walkBreadthFirst(ctx context.Context, path string, visitor VisitorCtxFunc) error {
+func (w *TreeWalker) walkBreadthFirst(ctx context.Context, path string, visitor VisitorFunc) error {
 	children, stat, err := w.fetcher(ctx, path)
 	if err != nil {
 		if errors.Is(err, ErrNoNode) {
@@ -119,7 +98,7 @@ func (w *TreeWalker) walkBreadthFirst(ctx context.Context, path string, visitor 
 }
 
 // walkDepthFirst walks the tree rooted at path in depth-first order.
-func (w *TreeWalker) walkDepthFirst(ctx context.Context, path string, visitor VisitorCtxFunc) error {
+func (w *TreeWalker) walkDepthFirst(ctx context.Context, path string, visitor VisitorFunc) error {
 	children, stat, err := w.fetcher(ctx, path)
 	if err != nil {
 		if errors.Is(err, ErrNoNode) {

@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -77,7 +80,7 @@ func WithTreeCacheBatchSize(batchSize int) TreeCacheOption {
 }
 
 // WithTreeCacheLogger returns an option that sets the logger to use for the tree cache.
-func WithTreeCacheLogger(logger Logger) TreeCacheOption {
+func WithTreeCacheLogger(logger *slog.Logger) TreeCacheOption {
 	return func(tc *TreeCache) {
 		tc.logger = logger
 	}
@@ -188,7 +191,7 @@ func (l *TreeCacheListenerFuncs) OnNodeDataChanged(path string, data []byte, sta
 
 type TreeCache struct {
 	conn              *Conn
-	logger            Logger
+	logger            *slog.Logger
 	rootPath          string         // Path to root node being cached.
 	includeData       bool           // true to include data in cache; false to omit.
 	absolutePaths     bool           // true to report full/absolute paths; false to report paths relative to rootPath.
@@ -253,13 +256,13 @@ func (tc *TreeCache) Sync(ctx context.Context) (err error) {
 		}
 
 		// Wait for path to exist.
-		if found, _, existsCh, err := tc.conn.ExistsWCtx(ctx, tc.rootPath); !found || err != nil {
+		if found, _, existsCh, err := tc.conn.ExistsW(ctx, tc.rootPath); !found || err != nil {
 			if err != nil {
-				tc.logger.Printf("failed to check if path exists: %v", err)
+				tc.logger.Error("failed to check if path exists", "error", err)
 				continue // Re-check conditions.
 			}
 			// Wait for the path to be created (up to 10 seconds, then re-check conditions).
-			tc.logger.Printf("waiting for path to exist: %s", tc.rootPath)
+			tc.logger.Info("waiting for path to exist", "path", tc.rootPath)
 			ctxWait, waitCancel := context.WithTimeout(ctx, 10*time.Second)
 			select {
 			case <-existsCh:
@@ -273,7 +276,7 @@ func (tc *TreeCache) Sync(ctx context.Context) (err error) {
 			if tc.listener != nil {
 				tc.listener.OnSyncError(err)
 			}
-			tc.logger.Printf("failed to sync tree cache: %v", err)
+			tc.logger.Error("failed to sync tree cache", "error", err)
 		}
 
 		// Loop back to restart next sync cycle.
@@ -285,7 +288,7 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 	stalled.Store(false)
 	// Start a recursive watch, so we do not miss any changes.
 	// We'll catch up with the changes after the initial sync.
-	watchCh, err := tc.conn.AddWatchCtx(ctx, tc.rootPath, true,
+	watchCh, err := tc.conn.AddWatch(ctx, tc.rootPath, true,
 		WithWatcherInvalidateOnDisconnect(),
 		WithWatcherReservoirLimit(tc.reservoirLimit),
 		WithStallCallback(func() {
@@ -295,7 +298,7 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 		return err
 	}
 	defer func() {
-		_ = tc.conn.RemoveWatch(watchCh)
+		_ = tc.conn.RemoveWatch(ctx, watchCh)
 	}()
 
 	// Holds the new tree state, which we must populate before replacing the current tree (if any).
@@ -312,7 +315,7 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 		}
 
 		// Fetch all the data in a single batch.
-		resps, err := tc.conn.MultiReadCtx(ctx, ops...)
+		resps, err := tc.conn.MultiRead(ctx, ops...)
 		if err != nil && !errors.Is(err, ErrNoNode) { // Ignore ErrNoNode.
 			return err
 		}
@@ -338,7 +341,7 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 	syncStartTime := time.Now()
 
 	// Walk from rootPath to populate our new tree state.
-	if err = tc.conn.BatchWalker(tc.rootPath, tc.batchSize).WalkCtx(ctx, batchAddNodes); err != nil {
+	if err = tc.conn.BatchWalker(tc.rootPath, tc.batchSize).Walk(ctx, batchAddNodes); err != nil {
 		return err
 	}
 
@@ -356,7 +359,7 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 	tc.syncMutex.Unlock()
 
 	syncElapsedTime := time.Since(syncStartTime)
-	tc.logger.Printf("synced tree cache in %s", syncElapsedTime)
+	tc.logger.Info("synced tree cache", "elapsed", syncElapsedTime)
 	if tc.listener != nil {
 		tc.listener.OnTreeSynced(syncElapsedTime)
 	}
@@ -376,7 +379,7 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 			case EventNodeCreated:
 				if relPath != "/" {
 					// Update stat of parent to reflect new child count.
-					found, stat, err := tc.conn.ExistsCtx(ctx, filepath.Dir(e.Path))
+					found, stat, err := tc.conn.Exists(ctx, filepath.Dir(e.Path))
 					if err != nil {
 						return err // We are out of sync.
 					}
@@ -385,7 +388,7 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 					}
 				}
 				if tc.includeData {
-					data, stat, err := tc.conn.GetCtx(ctx, e.Path)
+					data, stat, err := tc.conn.Get(ctx, e.Path)
 					if err != nil {
 						if errors.Is(err, ErrNoNode) {
 							continue // We'll get an EventNodeDeleted later.
@@ -397,7 +400,7 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 						tc.listener.OnNodeCreated(relPath, data, stat)
 					}
 				} else {
-					found, stat, err := tc.conn.ExistsCtx(ctx, e.Path)
+					found, stat, err := tc.conn.Exists(ctx, e.Path)
 					if err != nil {
 						return err // We are out of sync.
 					}
@@ -410,7 +413,7 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 				}
 			case EventNodeDataChanged:
 				if tc.includeData {
-					data, stat, err := tc.conn.GetCtx(ctx, e.Path)
+					data, stat, err := tc.conn.Get(ctx, e.Path)
 					if err != nil {
 						if errors.Is(err, ErrNoNode) {
 							continue // We'll get an EventNodeDeleted later.
@@ -422,7 +425,7 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 						tc.listener.OnNodeDataChanged(relPath, data, stat)
 					}
 				} else {
-					found, stat, err := tc.conn.ExistsCtx(ctx, e.Path)
+					found, stat, err := tc.conn.Exists(ctx, e.Path)
 					if err != nil {
 						return err // We are out of sync.
 					}
@@ -436,7 +439,7 @@ func (tc *TreeCache) doSync(ctx context.Context) error {
 			case EventNodeDeleted:
 				if relPath != "/" {
 					// Update stat of parent to reflect new child count.
-					found, stat, err := tc.conn.ExistsCtx(ctx, filepath.Dir(e.Path))
+					found, stat, err := tc.conn.Exists(ctx, filepath.Dir(e.Path))
 					if err != nil {
 						return err
 					}
@@ -607,10 +610,7 @@ func (tc *TreeCache) Children(path string) ([]string, *Stat, error) {
 		return nil, nil, ErrNoNode
 	}
 
-	var children []string
-	for name := range n.children {
-		children = append(children, name)
-	}
+	children := slices.Collect(maps.Keys(n.children))
 
 	return children, n.stat, nil
 }
