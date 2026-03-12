@@ -2,6 +2,7 @@ package zk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	gopath "path"
 )
@@ -97,7 +98,7 @@ func (w *TreeWalker) WalkChanCtx(ctx context.Context, bufferSize int) <-chan Vis
 func (w *TreeWalker) walkBreadthFirst(ctx context.Context, path string, visitor VisitorCtxFunc) error {
 	children, stat, err := w.fetcher(ctx, path)
 	if err != nil {
-		if err == ErrNoNode {
+		if errors.Is(err, ErrNoNode) {
 			return nil // Ignore ErrNoNode.
 		}
 		return err
@@ -121,7 +122,7 @@ func (w *TreeWalker) walkBreadthFirst(ctx context.Context, path string, visitor 
 func (w *TreeWalker) walkDepthFirst(ctx context.Context, path string, visitor VisitorCtxFunc) error {
 	children, stat, err := w.fetcher(ctx, path)
 	if err != nil {
-		if err == ErrNoNode {
+		if errors.Is(err, ErrNoNode) {
 			return nil // Ignore ErrNoNode.
 		}
 		return err

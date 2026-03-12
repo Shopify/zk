@@ -53,6 +53,11 @@ func (ln *Listener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	tc := &conn{Conn: c, Down: ln.Down, Up: ln.Up}
+	tc.closeFn = sync.OnceValue(func() error {
+		err := tc.Conn.Close()
+		close(tc.wchan)
+		return err
+	})
 	tc.start()
 	return tc, nil
 }
@@ -73,9 +78,8 @@ type conn struct {
 	Down Rate // for reads
 	Up   Rate // for writes
 
-	wchan     chan writeReq
-	closeOnce sync.Once
-	closeErr  error
+	wchan   chan writeReq
+	closeFn func() error
 }
 
 func (c *conn) start() {
@@ -103,12 +107,7 @@ func (c *conn) writeLoop() {
 }
 
 func (c *conn) Close() error {
-	c.closeOnce.Do(func() {
-		err := c.Conn.Close()
-		close(c.wchan)
-		c.closeErr = err
-	})
-	return c.closeErr
+	return c.closeFn()
 }
 
 func (c *conn) Write(p []byte) (n int, err error) {

@@ -10,16 +10,16 @@ import (
 )
 
 func Test_pump_NoConsumerLag(t *testing.T) {
-	var stalled uint32
+	var stalled atomic.Bool
 	stallCallback := func() {
 		t.Log("pump has stalled")
-		atomic.StoreUint32(&stalled, 1)
+		stalled.Store(true)
 	}
 
 	p := newPump[int](defaultReservoirLimit, stallCallback)
 	defer p.stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Start receiving items from pump in a new goroutine.
@@ -29,7 +29,7 @@ func Test_pump_NoConsumerLag(t *testing.T) {
 		startTime := time.Now()
 		defer close(consumerErr)
 
-		for i := 0; i < 65536; i++ {
+		for i := range 65536 {
 			item, ok := p.take(ctx)
 			if !ok {
 				if ctx.Err() != nil {
@@ -50,7 +50,7 @@ func Test_pump_NoConsumerLag(t *testing.T) {
 	// Send items to the pump in this goroutine.
 	// This will give items as fast as possible without pausing.
 	startTime := time.Now()
-	for i := 0; i < 65536; i++ {
+	for i := range 65536 {
 		ok := p.give(ctx, i)
 		if !ok {
 			t.Fatalf("expected pump to be accept item: %d", i)
@@ -64,7 +64,7 @@ func Test_pump_NoConsumerLag(t *testing.T) {
 		t.Fatalf("expected pump to stop cleanly, but saw error: %v", err)
 	}
 
-	if atomic.LoadUint32(&stalled) != 0 {
+	if stalled.Load() {
 		t.Fatalf("expected pump to not stall")
 	}
 
@@ -89,16 +89,16 @@ func Test_pump_NoConsumerLag(t *testing.T) {
 }
 
 func Test_pump_LowConsumerLag(t *testing.T) {
-	var stalled uint32
+	var stalled atomic.Bool
 	stallCallback := func() {
 		t.Log("pump has stalled")
-		atomic.StoreUint32(&stalled, 1)
+		stalled.Store(true)
 	}
 
 	p := newPump[int](defaultReservoirLimit, stallCallback)
 	defer p.stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	// Start receiving items from pump in a new goroutine.
@@ -107,7 +107,7 @@ func Test_pump_LowConsumerLag(t *testing.T) {
 		startTime := time.Now()
 		defer close(consumerErr)
 
-		for i := 0; i < 65536; i++ {
+		for i := range 65536 {
 			item, ok := p.take(ctx)
 			if !ok {
 				if ctx.Err() != nil {
@@ -132,7 +132,7 @@ func Test_pump_LowConsumerLag(t *testing.T) {
 	// Send items to the pump in this goroutine.
 	// This will give items as fast as possible without pausing.
 	startTime := time.Now()
-	for i := 0; i < 65536; i++ {
+	for i := range 65536 {
 		ok := p.give(ctx, i)
 		if !ok {
 			t.Fatalf("expected pump to be accept item: %d", i)
@@ -146,7 +146,7 @@ func Test_pump_LowConsumerLag(t *testing.T) {
 		t.Fatalf("expected pump to stop cleanly, but saw error: %v", err)
 	}
 
-	if atomic.LoadUint32(&stalled) != 0 {
+	if stalled.Load() {
 		t.Fatalf("expected pump to not stall")
 	}
 
@@ -171,16 +171,16 @@ func Test_pump_LowConsumerLag(t *testing.T) {
 }
 
 func Test_pump_HighConsumerLag(t *testing.T) {
-	var stalled uint32
+	var stalled atomic.Bool
 	stallCallback := func() {
 		t.Log("pump has stalled")
-		atomic.StoreUint32(&stalled, 1)
+		stalled.Store(true)
 	}
 
 	p := newPump[int](defaultReservoirLimit, stallCallback)
 	defer p.stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	// Start receiving items from pump in a new goroutine.
@@ -189,7 +189,7 @@ func Test_pump_HighConsumerLag(t *testing.T) {
 		startTime := time.Now()
 		defer close(consumerErr)
 
-		for i := 0; i < 65536; i++ {
+		for i := range 65536 {
 			item, ok := p.take(ctx)
 			if !ok {
 				if ctx.Err() != nil {
@@ -214,7 +214,7 @@ func Test_pump_HighConsumerLag(t *testing.T) {
 	// Send items to the pump in this goroutine.
 	// This will give items as fast as possible without pausing.
 	startTime := time.Now()
-	for i := 0; i < 65536; i++ {
+	for i := range 65536 {
 		ok := p.give(ctx, i)
 		if !ok {
 			t.Fatalf("expected pump to be accept item: %d", i)
@@ -228,7 +228,7 @@ func Test_pump_HighConsumerLag(t *testing.T) {
 		t.Fatalf("expected pump to stop cleanly, but saw error: %v", err)
 	}
 
-	if atomic.LoadUint32(&stalled) != 0 {
+	if stalled.Load() {
 		t.Fatalf("expected pump to not stall")
 	}
 
@@ -253,21 +253,21 @@ func Test_pump_HighConsumerLag(t *testing.T) {
 }
 
 func Test_pump_Stall(t *testing.T) {
-	var stalled uint32
+	var stalled atomic.Bool
 	stallCallback := func() {
 		t.Log("pump has stalled")
-		atomic.StoreUint32(&stalled, 1)
+		stalled.Store(true)
 	}
 
 	p := newPump[int](defaultReservoirLimit, stallCallback)
 	defer p.stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	// Send items to the pump in this goroutine.
 	// This will give items as fast as possible without pausing.
-	for i := 0; i < 65536; i++ {
+	for i := range 65536 {
 		ok := p.give(ctx, i)
 		if !ok {
 			break // Expected to fail when pump is stalled.
@@ -280,7 +280,7 @@ func Test_pump_Stall(t *testing.T) {
 		t.Fatalf("expected pump to stop cleanly, but saw error: %v", err)
 	}
 
-	if atomic.LoadUint32(&stalled) == 0 {
+	if !stalled.Load() {
 		t.Fatalf("expected pump to stall")
 	}
 
@@ -336,7 +336,7 @@ func Test_pump_give_Accepted(t *testing.T) {
 	p := newPump[int](16, nil)
 	defer p.stop()
 
-	ok := p.give(context.Background(), 1)
+	ok := p.give(t.Context(), 1)
 	if !ok {
 		t.Fatalf("expected pump to accept item")
 	}
@@ -348,7 +348,7 @@ func Test_pump_give_RejectedAfterInputClosed(t *testing.T) {
 
 	p.closeInput()
 
-	ok := p.give(context.Background(), 1)
+	ok := p.give(t.Context(), 1)
 	if ok {
 		t.Fatalf("expected pump to not accept item after input is closed")
 	}
@@ -358,7 +358,7 @@ func Test_pump_give_RejectedAfterStopped(t *testing.T) {
 	p := newPump[int](16, nil)
 	p.stop()
 
-	ok := p.give(context.Background(), 1)
+	ok := p.give(t.Context(), 1)
 	if ok {
 		t.Fatalf("expected pump to not accept item after stopped")
 	}
@@ -368,7 +368,7 @@ func Test_pump_poll_Accepted(t *testing.T) {
 	p := newPump[int](16, nil)
 	defer p.stop()
 
-	_ = p.give(context.Background(), 1)
+	_ = p.give(t.Context(), 1)
 	time.Sleep(100 * time.Millisecond)
 
 	item, ok := p.poll()
@@ -394,9 +394,9 @@ func Test_pump_take_Accepted(t *testing.T) {
 	p := newPump[int](16, nil)
 	defer p.stop()
 
-	_ = p.give(context.Background(), 1)
+	_ = p.give(t.Context(), 1)
 
-	item, ok := p.take(context.Background())
+	item, ok := p.take(t.Context())
 	if !ok {
 		t.Fatalf("expected pump to receive item")
 	}

@@ -15,7 +15,7 @@ func Test_ringBuffer_cap(t *testing.T) {
 func Test_ringBuffer_push(t *testing.T) {
 	rb := newRingBuffer[int](10)
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		rb.push(i)
 	}
 	if rb.len() != 10 {
@@ -31,7 +31,7 @@ func Test_ringBuffer_push(t *testing.T) {
 	}
 
 	// Overwrite items in the buffer.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		rb.push(-i)
 	}
 	if rb.len() != 10 {
@@ -50,7 +50,7 @@ func Test_ringBuffer_push(t *testing.T) {
 func Test_ringBuffer_offer(t *testing.T) {
 	rb := newRingBuffer[int](10)
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if !rb.offer(i) {
 			t.Fatalf("expected offer to succeed")
 		}
@@ -76,11 +76,11 @@ func Test_ringBuffer_offer(t *testing.T) {
 func Test_ringBuffer_pop(t *testing.T) {
 	rb := newRingBuffer[int](10)
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		rb.push(i)
 	}
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		item, ok := rb.pop()
 		if !ok {
 			t.Fatalf("expected item %d, got none", i)
@@ -103,11 +103,11 @@ func Test_ringBuffer_pop(t *testing.T) {
 func Test_ringBuffer_peek(t *testing.T) {
 	rb := newRingBuffer[int](10)
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		rb.push(i)
 	}
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		item, ok := rb.peek()
 		if !ok {
 			t.Fatalf("expected item %d, got none", i)
@@ -131,7 +131,7 @@ func Test_ringBuffer_peek(t *testing.T) {
 func Test_ringBuffer_clear(t *testing.T) {
 	rb := newRingBuffer[int](10)
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		rb.push(i)
 	}
 
@@ -144,7 +144,7 @@ func Test_ringBuffer_clear(t *testing.T) {
 func Test_ringBuffer_ensureCapacity(t *testing.T) {
 	rb := newRingBuffer[int](10)
 
-	for i := 0; i < 15; i++ {
+	for i := range 15 {
 		rb.push(i)
 	}
 

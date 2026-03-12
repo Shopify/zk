@@ -5,8 +5,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +29,7 @@ func WorldACL(perms int32) []ACL {
 }
 
 func DigestACL(perms int32, user, password string) []ACL {
-	userPass := []byte(fmt.Sprintf("%s:%s", user, password))
+	userPass := fmt.Appendf(nil, "%s:%s", user, password)
 	h := sha1.New()
 	if n, err := h.Write(userPass); err != nil || n != len(userPass) {
 		panic("SHA1 failed")
@@ -46,7 +47,7 @@ func FormatServers(servers []string) []string {
 		if strings.Contains(addr, ":") {
 			srvs[i] = addr
 		} else {
-			srvs[i] = addr + ":" + strconv.Itoa(DefaultPort)
+			srvs[i] = net.JoinHostPort(addr, strconv.Itoa(DefaultPort))
 		}
 	}
 	return srvs
@@ -55,7 +56,7 @@ func FormatServers(servers []string) []string {
 // stringShuffle performs a Fisher-Yates shuffle on a slice of strings
 func stringShuffle(s []string) {
 	for i := len(s) - 1; i > 0; i-- {
-		j := rand.Intn(i + 1)
+		j := rand.IntN(i + 1)
 		s[i], s[j] = s[j], s[i]
 	}
 }
@@ -136,23 +137,10 @@ func readFullWithDeadline(conn net.Conn, b []byte, timeout time.Duration) (int, 
 }
 
 func safeResetTimer(tm *time.Timer, d time.Duration) {
-	if !tm.Stop() {
-		select {
-		case <-tm.C:
-		default:
-		}
-	}
+	tm.Stop()
 	tm.Reset(d)
 }
 
 func slicesEqual[T comparable](a, b []T) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	return slices.Equal(a, b)
 }

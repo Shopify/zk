@@ -2,7 +2,7 @@ package zk
 
 import (
 	"context"
-	"sort"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -59,7 +59,7 @@ func TestTreeCache_ConsistentAfterInitialSync(t *testing.T) {
 			// By default, paths a relative to root.
 			cache := NewTreeCache(c, "/test-tree-cache",
 				WithTreeCacheIncludeData(true))
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second*5)
 			defer cancel()
 
 			syncErrCh := make(chan error, 1)
@@ -136,7 +136,7 @@ func TestTreeCache_OpsWithRelativePaths(t *testing.T) {
 
 			cache := NewTreeCache(c, "/test-tree-cache",
 				WithTreeCacheIncludeData(true))
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second*5)
 			defer cancel()
 
 			syncErrCh := make(chan error, 1)
@@ -208,7 +208,7 @@ func TestTreeCache_OpsWithRelativePaths(t *testing.T) {
 			if len(children) != 2 {
 				t.Fatalf("cache node / children mismatch: expected %d, got %d", 2, len(children))
 			}
-			sort.Strings(children) // For consistency.
+			slices.Sort(children) // For consistency.
 			if children[0] != "child1" || children[1] != "child2" {
 				t.Fatalf("cache node / children mismatch: expected %v, got %v", []string{"child1", "child2"}, children)
 			}
@@ -223,7 +223,7 @@ func TestTreeCache_OpsWithRelativePaths(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to walk: %v", err)
 			}
-			sort.Strings(visited) // For consistency.
+			slices.Sort(visited) // For consistency.
 			if len(visited) != 5 {
 				t.Fatalf("cache walker visited mismatch: expected %d, got %d", 5, len(visited))
 			}
@@ -277,7 +277,7 @@ func TestTreeCache_OpsWithAbsolutePaths(t *testing.T) {
 			cache := NewTreeCache(c, "/test-tree-cache",
 				WithTreeCacheIncludeData(true),
 				WithTreeCacheAbsolutePaths(true))
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second*5)
 			defer cancel()
 
 			syncErrCh := make(chan error, 1)
@@ -342,7 +342,7 @@ func TestTreeCache_OpsWithAbsolutePaths(t *testing.T) {
 			if len(children) != 2 {
 				t.Fatalf("cache node /test-tree-cache children mismatch: expected %d, got %d", 2, len(children))
 			}
-			sort.Strings(children) // For consistency.
+			slices.Sort(children) // For consistency.
 			if children[0] != "child1" || children[1] != "child2" {
 				t.Fatalf("cache node /test-tree-cache/children mismatch: expected %v, got %v", []string{"child1", "child2"}, children)
 			}
@@ -357,7 +357,7 @@ func TestTreeCache_OpsWithAbsolutePaths(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to walk: %v", err)
 			}
-			sort.Strings(visited) // For consistency.
+			slices.Sort(visited) // For consistency.
 			if len(visited) != 5 {
 				t.Fatalf("cache walker visited mismatch: expected %d, got %d", 5, len(visited))
 			}
@@ -381,7 +381,7 @@ func TestTreeCache_WatchesNodeCreate(t *testing.T) {
 			}
 
 			cache := NewTreeCache(c, "/test-tree-cache", WithTreeCacheIncludeData(true))
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second*5)
 			defer cancel()
 
 			syncErrCh := make(chan error, 1)
@@ -442,7 +442,7 @@ func TestTreeCache_WatchesNodeUpdate(t *testing.T) {
 			}
 
 			cache := NewTreeCache(c, "/test-tree-cache", WithTreeCacheIncludeData(true))
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second*5)
 			defer cancel()
 
 			syncErrCh := make(chan error, 1)
@@ -494,7 +494,7 @@ func TestTreeCache_WatchesNodeDelete(t *testing.T) {
 			}
 
 			cache := NewTreeCache(c, "/test-tree-cache", WithTreeCacheIncludeData(true))
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second*5)
 			defer cancel()
 
 			syncErrCh := make(chan error, 1)
@@ -548,7 +548,7 @@ func TestTreeCache_RecoversFromDisconnect(t *testing.T) {
 					OnSyncStoppedFunc: func(_ error) { close(syncDoneChan) },
 					OnTreeSyncedFunc:  func(_ time.Duration) { syncDoneChan <- struct{}{} },
 				}))
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second*5)
 			defer cancel()
 
 			syncErrCh := make(chan error, 1)
@@ -578,7 +578,7 @@ func TestTreeCache_RecoversFromDisconnect(t *testing.T) {
 			// While c1 is disconnected, create a bunch of nodes on a new connection.
 			// This will cause the cache to miss some events, but hopefully it will catch up on session reestablishment.
 			WithConnectAll(t, tc, func(t *testing.T, c2 *Conn, _ <-chan Event) {
-				for i := 0; i < 100; i++ {
+				for i := range 100 {
 					_, err := c2.Create("/test-tree-cache/child-"+strconv.Itoa(i), []byte("foo"), 0, WorldACL(PermAll))
 					if err != nil {
 						t.Fatalf("failed to create node %s: %v", "/test-tree-cache/child-"+strconv.Itoa(i), err)
@@ -596,7 +596,7 @@ func TestTreeCache_RecoversFromDisconnect(t *testing.T) {
 			}
 
 			// Check that all nodes are present in the cache.
-			for i := 0; i < 100; i++ {
+			for i := range 100 {
 				ok, _, err := cache.Exists("/child-" + strconv.Itoa(i))
 				if err != nil {
 					t.Fatalf("failed to get cache node /child-%d: %v", i, err)
@@ -632,7 +632,7 @@ func TestTreeCache_WatchesNodeDeleting(t *testing.T) {
 
 			listener := NewTreeCacheListenerMock()
 			cache := NewTreeCache(c, "/test-tree-cache", WithTreeCacheIncludeData(true), WithTreeCacheListener(listener))
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second*5)
 			defer cancel()
 
 			syncErrCh := make(chan error, 1)
@@ -716,7 +716,7 @@ func TestTreeCache_WatchesNodeDeletingAbsolute(t *testing.T) {
 
 			listener := NewTreeCacheListenerMock()
 			cache := NewTreeCache(c, "/test-tree-cache", WithTreeCacheIncludeData(true), WithTreeCacheListener(listener), WithTreeCacheAbsolutePaths(true))
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second*5)
 			defer cancel()
 
 			syncErrCh := make(chan error, 1)

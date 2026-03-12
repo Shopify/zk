@@ -1,9 +1,4 @@
 
-REPO_ROOT = $(shell pwd -P)
-TOOLS_BINDIR = $(REPO_ROOT)/tools/bin
-GOTESTSUM_BIN = $(TOOLS_BINDIR)/gotestsum
-GOLANGCI_LINT_BIN ?= $(TOOLS_BINDIR)/golangci-lint
-
 PACKAGES := $(shell go list ./... | grep -v examples)
 
 # make file to hold the logic of build and test setup
@@ -31,36 +26,26 @@ zookeeper: $(ZK)
 	ln -s $(ZK) zookeeper
 
 .PHONY: setup
-setup: zookeeper tools
-
-.PHONY: tools
-tools: tools/tools.go tools/go.mod
-	mkdir -p "$(TOOLS_BINDIR)"
-	cd tools && \
-		export GOBIN="${TOOLS_BINDIR}" && \
-		go install \
-			github.com/golangci/golangci-lint/cmd/golangci-lint \
-			gotest.tools/gotestsum && \
-		cd ..
+setup: zookeeper
 
 .PHONY: lint
-lint: tools
+lint:
 	go vet ./...
-	$(GOLANGCI_LINT_BIN) run -v
+	go tool golangci-lint run -v
 
 .PHONY: lint-fix
-lint-fix: tools
+lint-fix:
 	go fmt ./...
 	go vet ./...
-	$(GOLANGCI_LINT_BIN) run -v --fix
+	go tool golangci-lint run -v --fix
 
 .PHONY: build
 build:
 	go build ./...
 
 .PHONY: test
-test: tools build zookeeper
-	ZK_VERSION=$(ZK_VERSION) $(GOTESTSUM_BIN) --format dots -- -timeout 500s -v -race -covermode atomic -coverprofile=profile.cov $(PACKAGES)
+test: build zookeeper
+	ZK_VERSION=$(ZK_VERSION) go tool gotestsum --format dots -- -timeout 500s -v -race -covermode atomic -coverprofile=profile.cov $(PACKAGES)
 
 .PHONY: clean
 clean:
@@ -70,4 +55,3 @@ clean:
 	rm -rf zookeeper-*/
 	rm -f zookeeper
 	rm -f profile.cov
-	rm -rf tools/bin

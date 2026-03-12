@@ -41,15 +41,20 @@ func (c pumpCondition) String() string {
 
 // newPump returns a new pump[T] with the given reservoir size limit and optional stall callback func.
 func newPump[T any](reservoirLimit uint32, stallCallback func()) *pump[T] {
+	input := make(chan T, 32)
+	stopRequested := make(chan struct{})
+
 	p := &pump[T]{
-		input:          make(chan T, 32),
+		input:          input,
 		output:         make(chan T, 32),
 		reservoir:      newRingBuffer[T](32),
 		started:        make(chan struct{}),
-		stopRequested:  make(chan struct{}),
+		stopRequested:  stopRequested,
 		stopped:        make(chan struct{}),
 		reservoirLimit: reservoirLimit,
 		stallCallback:  stallCallback,
+		stopFn:         sync.OnceFunc(func() { close(stopRequested) }),
+		closeInputFn:   sync.OnceFunc(func() { close(input) }),
 	}
 
 	go p.run()
@@ -77,13 +82,13 @@ type pump[T any] struct {
 	started        chan struct{}  // Closed when the pump has started running.
 	stopRequested  chan struct{}  // Closed when stop has been called.
 	stopped        chan struct{}  // Closed after pump has stopped running.
-	stopOnce       sync.Once      // Ensures stopRequested is closed only once.
-	closeInputOnce sync.Once      // Ensures input is closed only once.
 	reservoirLimit uint32         // The size limit for reservoir.
 	stallCallback  func()         // An optional callback to invoke when the pump stalls.
-	intakeTotal    int64          // Total number of values received from input.
-	dischargeTotal int64          // Total number of values sent to output.
-	reservoirPeak  int32          // Maximum observed size of reservoir.
+	stopFn         func()         // Idempotent function to close stopRequested.
+	closeInputFn   func()         // Idempotent function to close input.
+	intakeTotal    atomic.Int64   // Total number of values received from input.
+	dischargeTotal atomic.Int64   // Total number of values sent to output.
+	reservoirPeak  atomic.Int32   // Maximum observed size of reservoir.
 }
 
 type pumpStats struct {
@@ -95,9 +100,9 @@ type pumpStats struct {
 // stats returns the pump's statistics.
 func (p *pump[T]) stats() pumpStats {
 	return pumpStats{
-		intakeTotal:    atomic.LoadInt64(&p.intakeTotal),
-		dischargeTotal: atomic.LoadInt64(&p.dischargeTotal),
-		reservoirPeek:  atomic.LoadInt32(&p.reservoirPeak),
+		intakeTotal:    p.intakeTotal.Load(),
+		dischargeTotal: p.dischargeTotal.Load(),
+		reservoirPeek:  p.reservoirPeak.Load(),
 	}
 }
 
@@ -200,18 +205,14 @@ func (p *pump[T]) take(ctx context.Context) (T, bool) {
 // After all previously received values have been drained to the output buffer, the pump will stop naturally.
 // This method is idempotent and safe to call multiple times.
 func (p *pump[T]) closeInput() {
-	p.closeInputOnce.Do(func() {
-		close(p.input)
-	})
+	p.closeInputFn()
 }
 
 // stop immediately halts the pump and discards any values that have not yet been drained to the output buffer.
 // It is preferable to call closeInput instead, which allows the pump to drain naturally.
 // This method is idempotent and safe to call multiple times.
 func (p *pump[T]) stop() {
-	p.stopOnce.Do(func() {
-		close(p.stopRequested)
-	})
+	p.stopFn()
 }
 
 // isStopRequested returns true if the pump has been requested to stop; false otherwise.
@@ -250,8 +251,8 @@ func (p *pump[T]) run() {
 		if p.reservoir.isEmpty() {
 			// The reservoir is empty, so try to fill the output directly from the input.
 			intakeCount, dischargeCount, cond := p.transferDirect(tm)
-			atomic.AddInt64(&p.intakeTotal, intakeCount)
-			atomic.AddInt64(&p.dischargeTotal, dischargeCount)
+			p.intakeTotal.Add(intakeCount)
+			p.dischargeTotal.Add(dischargeCount)
 			switch cond {
 			case pumpConditionInputClosed:
 				endOfInput = true
@@ -264,8 +265,8 @@ func (p *pump[T]) run() {
 		// The reservoir is not empty.
 		// Intake and discharge at the same time (blocking on both).
 		intakeCount, dischargeCount, cond := p.intakeAndDischarge(tm)
-		atomic.AddInt64(&p.intakeTotal, intakeCount)
-		atomic.AddInt64(&p.dischargeTotal, dischargeCount)
+		p.intakeTotal.Add(intakeCount)
+		p.dischargeTotal.Add(dischargeCount)
 		switch cond {
 		case pumpConditionInputClosed:
 			endOfInput = true
@@ -287,7 +288,7 @@ func (p *pump[T]) run() {
 	// The input is dry, so drain what remains from the reservoir.
 	if !p.reservoir.isEmpty() {
 		count, _ := p.discharge()
-		atomic.AddInt64(&p.dischargeTotal, count)
+		p.dischargeTotal.Add(count)
 	}
 }
 
@@ -419,7 +420,7 @@ func (p *pump[T]) pushReservoir(t T) {
 
 	// Keep track of the peak reservoir size.
 	l := int32(p.reservoir.len())
-	if l > atomic.LoadInt32(&p.reservoirPeak) {
-		atomic.StoreInt32(&p.reservoirPeak, l)
+	if l > p.reservoirPeak.Load() {
+		p.reservoirPeak.Store(l)
 	}
 }

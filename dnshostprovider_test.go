@@ -1,8 +1,10 @@
 package zk
 
 import (
+	"errors"
 	"fmt"
 	"log"
+	"net"
 	"testing"
 	"time"
 )
@@ -18,7 +20,7 @@ func localhostLookupHost(_ string) ([]string, error) {
 func TestDNSHostProviderCreate(t *testing.T) {
 	WithTestCluster(t, 1, nil, logWriter{t: t, p: "[ZKERR] "}, func(t *testing.T, tc *TestCluster) {
 		port := tc.Servers[0].Port
-		server := fmt.Sprintf("foo.example.com:%d", port)
+		server := net.JoinHostPort("foo.example.com", fmt.Sprint(port))
 		hostProvider := &DNSHostProvider{lookupHost: localhostLookupHost}
 		c, _, err := Connect([]string{server}, time.Second*15, WithHostProvider(hostProvider))
 		if err != nil {
@@ -28,7 +30,7 @@ func TestDNSHostProviderCreate(t *testing.T) {
 
 		path := "/gozk-test"
 
-		if err := c.Delete(path, -1); err != nil && err != ErrNoNode {
+		if err := c.Delete(path, -1); err != nil && !errors.Is(err, ErrNoNode) {
 			t.Fatalf("Delete returned error: %+v", err)
 		}
 		if p, err := c.Create(path, []byte{1, 2, 3, 4}, 0, WorldACL(PermAll)); err != nil {
@@ -79,7 +81,7 @@ func (lhpf *localHostPortsFacade) Next() (string, bool) {
 		log.Fatalf("localHostPortsFacade out of ports to assign to %q; current config: %q", server, lhpf.mapped)
 	}
 
-	localMapping := fmt.Sprintf("localhost:%d", lhpf.ports[lhpf.nextPort])
+	localMapping := net.JoinHostPort("localhost", fmt.Sprint(lhpf.ports[lhpf.nextPort]))
 	lhpf.mapped[server] = localMapping
 	lhpf.nextPort++
 	return localMapping, retryStart
@@ -112,7 +114,7 @@ func TestDNSHostProviderReconnect(t *testing.T) {
 		path := "/gozk-test"
 
 		// Initial operation to force connection.
-		if err := c.Delete(path, -1); err != nil && err != ErrNoNode {
+		if err := c.Delete(path, -1); err != nil && !errors.Is(err, ErrNoNode) {
 			t.Fatalf("Delete returned error: %+v", err)
 		}
 
@@ -121,7 +123,7 @@ func TestDNSHostProviderReconnect(t *testing.T) {
 		t.Logf("Connected to %q. Finding test server index…", currentServer)
 		serverIndex := -1
 		for i, server := range tc.Servers {
-			server := fmt.Sprintf("localhost:%d", server.Port)
+			server := net.JoinHostPort("localhost", fmt.Sprint(server.Port))
 			t.Logf("…trying %q", server)
 			if currentServer == server {
 				serverIndex = i

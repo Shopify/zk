@@ -57,9 +57,9 @@ type authCreds struct {
 // Conn is the client connection and tracks all details for communication with the server.
 type Conn struct {
 	lastZxid         int64
-	sessionID        int64
-	state            State // must be 32-bit aligned
-	xid              uint32
+	sessionID        atomic.Int64
+	state            atomic.Int32
+	xid              atomic.Uint32
 	sessionTimeoutMs int32 // session timeout in milliseconds
 	passwd           []byte
 
@@ -71,7 +71,7 @@ type Conn struct {
 	eventChan      chan Event
 	eventCallback  EventCallback // may be nil
 	shouldQuit     chan struct{}
-	shouldQuitOnce sync.Once
+	closeFn        func()
 	pingInterval   time.Duration
 	ioTimeout      time.Duration
 	connectTimeout time.Duration
@@ -180,7 +180,6 @@ func Connect(servers []string, sessionTimeout time.Duration, options ...connOpti
 		dialer:         net.DialTimeout,
 		hostProvider:   &DNSHostProvider{},
 		conn:           nil,
-		state:          StateDisconnected,
 		eventChan:      ec,
 		shouldQuit:     make(chan struct{}),
 		connectTimeout: 1 * time.Second,
@@ -193,6 +192,15 @@ func Connect(servers []string, sessionTimeout time.Duration, options ...connOpti
 		buf:            make([]byte, bufferSize),
 		resendZkAuthFn: resendZkAuth,
 	}
+
+	conn.state.Store(int32(StateDisconnected))
+	conn.closeFn = sync.OnceFunc(func() {
+		close(conn.shouldQuit)
+		select {
+		case <-conn.queueRequest(context.Background(), opClose, nil, nil, nil):
+		case <-time.After(time.Second):
+		}
+	})
 
 	// Set provided options.
 	for _, option := range options {
@@ -299,24 +307,17 @@ func WithMaxConnBufferSize(maxBufferSize int) connOption { // nolint: revive
 
 // Close will submit a close request with ZK and signal the connection to stop sending and receiving packets.
 func (c *Conn) Close() {
-	c.shouldQuitOnce.Do(func() {
-		close(c.shouldQuit)
-
-		select {
-		case <-c.queueRequest(context.Background(), opClose, nil, nil, nil):
-		case <-time.After(time.Second):
-		}
-	})
+	c.closeFn()
 }
 
 // State returns the current state of the connection.
 func (c *Conn) State() State {
-	return State(atomic.LoadInt32((*int32)(&c.state)))
+	return State(c.state.Load())
 }
 
 // SessionID returns the current session id of the connection.
 func (c *Conn) SessionID() int64 {
-	return atomic.LoadInt64(&c.sessionID)
+	return c.sessionID.Load()
 }
 
 // SetLogger sets the logger to be used for printing errors.
@@ -333,7 +334,7 @@ func (c *Conn) setTimeouts(sessionTimeoutMs int32) {
 }
 
 func (c *Conn) setState(state State) {
-	atomic.StoreInt32((*int32)(&c.state), int32(state))
+	c.state.Store(int32(state))
 	c.sendEvent(Event{Type: EventSession, State: state, Server: c.Server()})
 }
 
@@ -423,7 +424,7 @@ func (c *Conn) loop(ctx context.Context) {
 
 		err := c.authenticate()
 		switch {
-		case err == ErrSessionExpired:
+		case errors.Is(err, ErrSessionExpired):
 			c.logger.Printf("authentication expired: %s", err)
 			c.resetSession(err)
 		case err != nil && c.conn != nil:
@@ -441,10 +442,8 @@ func (c *Conn) loop(ctx context.Context) {
 
 			var wg sync.WaitGroup
 
-			wg.Add(1)
-			go func() {
+			wg.Go(func() {
 				defer c.conn.Close() // causes recv loop to EOF/exit
-				defer wg.Done()
 
 				if err := c.resendZkAuthFn(ctx, c); err != nil {
 					c.logger.Printf("error in resending auth creds: %v", err)
@@ -454,12 +453,10 @@ func (c *Conn) loop(ctx context.Context) {
 				if err := c.sendLoop(); err != nil || c.logInfo {
 					c.logger.Printf("send loop terminated: %v", err)
 				}
-			}()
+			})
 
-			wg.Add(1)
-			go func() {
+			wg.Go(func() {
 				defer close(c.closeChan) // tell send loop to exit
-				defer wg.Done()
 
 				var err error
 				if c.debugCloseRecvLoop {
@@ -467,13 +464,13 @@ func (c *Conn) loop(ctx context.Context) {
 				} else {
 					err = c.recvLoop(c.conn)
 				}
-				if err != io.EOF || c.logInfo {
+				if !errors.Is(err, io.EOF) || c.logInfo {
 					c.logger.Printf("recv loop terminated: %v", err)
 				}
 				if err == nil {
 					panic("zk: recvLoop should never return nil error")
 				}
-			}()
+			})
 
 			c.restoreWatches()
 			wg.Wait()
@@ -490,7 +487,7 @@ func (c *Conn) loop(ctx context.Context) {
 		default:
 		}
 
-		if err != ErrSessionExpired {
+		if !errors.Is(err, ErrSessionExpired) {
 			err = ErrConnectionClosed
 		}
 		c.flushRequests(err)
@@ -758,7 +755,7 @@ func (c *Conn) authenticate() error {
 		return ErrSessionExpired
 	}
 
-	atomic.StoreInt64(&c.sessionID, r.SessionID)
+	c.sessionID.Store(r.SessionID)
 	c.setTimeouts(r.TimeOut)
 	c.passwd = r.Passwd
 	c.setState(StateHasSession)
@@ -767,7 +764,7 @@ func (c *Conn) authenticate() error {
 }
 
 func (c *Conn) resetSession(err error) {
-	atomic.StoreInt64(&c.sessionID, int64(0))
+	c.sessionID.Store(int64(0))
 	c.passwd = emptyPassword
 	c.lastZxid = 0
 	c.invalidateWatchers(err)
@@ -920,7 +917,7 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 }
 
 func (c *Conn) nextXid() int32 {
-	return int32(atomic.AddUint32(&c.xid, 1) & 0x7fffffff)
+	return int32(c.xid.Add(1) & 0x7fffffff)
 }
 
 func (c *Conn) addWatcher(path string, kind watcherKind, opts watcherOptions) <-chan Event {
@@ -1372,12 +1369,11 @@ func (c *Conn) CreateProtectedEphemeralSequentialCtx(ctx context.Context, path s
 	protectedPath := strings.Join(parts, "/")
 
 	var newPath string
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		newPath, err = c.CreateCtx(ctx, protectedPath, data, FlagEphemeral|FlagSequence, acl)
-		switch err {
-		case ErrSessionExpired:
+		if errors.Is(err, ErrSessionExpired) {
 			// No need to search for the node since it can't exist. Just try again.
-		case ErrConnectionClosed:
+		} else if errors.Is(err, ErrConnectionClosed) {
 			children, _, err := c.ChildrenCtx(ctx, rootPath)
 			if err != nil {
 				// Return the path with GUID for error handling
@@ -1396,9 +1392,9 @@ func (c *Conn) CreateProtectedEphemeralSequentialCtx(ctx context.Context, path s
 					}
 				}
 			}
-		case nil:
+		} else if err == nil {
 			return newPath, nil
-		default:
+		} else {
 			return protectedPath, err
 		}
 	}
@@ -1438,7 +1434,7 @@ func (c *Conn) ExistsCtx(ctx context.Context, path string) (bool, *Stat, error) 
 	}
 
 	exists := true
-	if err == ErrNoNode {
+	if errors.Is(err, ErrNoNode) {
 		exists = false
 		err = nil
 	}
@@ -1462,7 +1458,7 @@ func (c *Conn) ExistsWCtx(ctx context.Context, path string) (bool, *Stat, <-chan
 	_, aborted, err := c.request(ctx, opExists, &existsRequest{Path: path, Watch: true}, res, func(req *request, res *responseHeader, err error) {
 		if err == nil {
 			ech = c.addWatcher(path, watcherKindData, watcherOptions{})
-		} else if err == ErrNoNode {
+		} else if errors.Is(err, ErrNoNode) {
 			ech = c.addWatcher(path, watcherKindExist, watcherOptions{})
 		}
 	})
@@ -1471,7 +1467,7 @@ func (c *Conn) ExistsWCtx(ctx context.Context, path string) (bool, *Stat, <-chan
 	}
 
 	exists := true
-	if err == ErrNoNode {
+	if errors.Is(err, ErrNoNode) {
 		exists = false
 		err = nil
 	}

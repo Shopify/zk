@@ -71,17 +71,19 @@ type watcher interface {
 }
 
 func newFireOnceWatcher(opts watcherOptions) *fireOnceWatcher {
+	ch := make(chan Event, 2) // Buffer to hold 1 watch event + 1 close event.
 	return &fireOnceWatcher{
-		opts: opts,
-		ch:   make(chan Event, 2), // Buffer to hold 1 watch event + 1 close event.
+		opts:    opts,
+		ch:      ch,
+		closeFn: sync.OnceFunc(func() { close(ch) }),
 	}
 }
 
 // fireOnceWatcher is an implementation of watcher that fires a single watch event (ie: for GetW, ExistsW, ChildrenW).
 type fireOnceWatcher struct {
-	opts      watcherOptions
-	ch        chan Event
-	closeOnce sync.Once
+	opts    watcherOptions
+	ch      chan Event
+	closeFn func()
 }
 
 func (w *fireOnceWatcher) eventChan() <-chan Event {
@@ -105,9 +107,7 @@ func (w *fireOnceWatcher) options() watcherOptions {
 }
 
 func (w *fireOnceWatcher) close() {
-	w.closeOnce.Do(func() {
-		close(w.ch)
-	})
+	w.closeFn()
 }
 
 func newPersistentWatcher(opts watcherOptions) *persistentWatcher {
