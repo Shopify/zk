@@ -23,7 +23,7 @@ We are open to all Pull Requests, its best to accompany the requests with an iss
 
 * The PR requires the github actions to pass.
 
-* Requires at least one maintainer to approve the PR to merge to master.
+* Requires at least one maintainer to approve the PR to merge to main.
 
 While the above must be satisfied prior to having your pull request reviewed, the reviewer(s) may ask you to complete additional design work, tests, or other changes before your pull request can be ultimately accepted.
 
@@ -33,8 +33,8 @@ Since this library is a core client for interacting with Zookeeper, we do [SemVe
 
 Zookeeper itself maintains a compatibility check on the main codebase as well as maintaining backwards compatibility through all Major releases, this core library will try to uphold similar standards of releases.
 
-* Code that is merged into master should be ready for release at any given time.
-  * This is to say, that code should not be merged into master if it is not complete and ready for production use.
+* Code that is merged into main should be ready for release at any given time.
+  * This is to say, that code should not be merged into main if it is not complete and ready for production use.
 
 * If a fix needs to be released ahead of normal operations, file an issue explaining the urgency and impact of the bug.
 
